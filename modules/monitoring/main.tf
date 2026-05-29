@@ -129,8 +129,11 @@ resource "aws_cloudwatch_dashboard" "main" {
   dashboard_body = jsonencode({
     widgets = [
       {
-        type       = "metric"
-        x          = 0; y = 0; width = 12; height = 6
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
         properties = {
           title   = "Lambda — Invocations & Errors"
           view    = "timeSeries"
@@ -144,8 +147,11 @@ resource "aws_cloudwatch_dashboard" "main" {
         }
       },
       {
-        type       = "metric"
-        x          = 12; y = 0; width = 12; height = 6
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
         properties = {
           title   = "Lambda — Duration (ms)"
           view    = "timeSeries"
@@ -159,8 +165,11 @@ resource "aws_cloudwatch_dashboard" "main" {
         }
       },
       {
-        type       = "metric"
-        x          = 0; y = 6; width = 12; height = 6
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
         properties = {
           title   = "API Gateway — Request Count"
           view    = "timeSeries"
@@ -172,8 +181,11 @@ resource "aws_cloudwatch_dashboard" "main" {
         }
       },
       {
-        type       = "metric"
-        x          = 12; y = 6; width = 12; height = 6
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
         properties = {
           title   = "API Gateway — 4XX / 5XX Errors"
           view    = "timeSeries"
@@ -186,8 +198,11 @@ resource "aws_cloudwatch_dashboard" "main" {
         }
       },
       {
-        type       = "metric"
-        x          = 0; y = 12; width = 12; height = 6
+        type   = "metric"
+        x      = 0
+        y      = 12
+        width  = 12
+        height = 6
         properties = {
           title   = "API Gateway — Latency (ms)"
           view    = "timeSeries"
@@ -200,8 +215,11 @@ resource "aws_cloudwatch_dashboard" "main" {
         }
       },
       {
-        type       = "metric"
-        x          = 12; y = 12; width = 12; height = 6
+        type   = "metric"
+        x      = 12
+        y      = 12
+        width  = 12
+        height = 6
         properties = {
           title   = "Lambda — Throttles & Concurrent Executions"
           view    = "timeSeries"
@@ -216,4 +234,3 @@ resource "aws_cloudwatch_dashboard" "main" {
     ]
   })
 }
-
