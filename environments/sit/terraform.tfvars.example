@@ -1,0 +1,14 @@
+# Copy this to terraform.tfvars and fill in your values.
+# DO NOT commit terraform.tfvars (it is in .gitignore).
+
+project_name = "api-demo"
+aws_region   = "eu-north-1"
+alarm_email  = "your-sit-alerts@example.com"
+
+# SIT settings — WAF on, moderate limits, 30-day log retention
+log_retention_days     = 30
+throttling_burst_limit = 100
+throttling_rate_limit  = 50
+waf_rate_limit         = 1000
+enable_waf             = true
+

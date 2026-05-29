@@ -1,0 +1,14 @@
+# Copy this to terraform.tfvars and fill in your values.
+# DO NOT commit terraform.tfvars (it is in .gitignore).
+
+project_name = "api-demo"
+aws_region   = "eu-north-1"
+alarm_email  = "your-prod-alerts@example.com"
+
+# Prod settings (higher limits, WAF on, longer log retention)
+log_retention_days     = 90
+throttling_burst_limit = 500
+throttling_rate_limit  = 200
+waf_rate_limit         = 2000
+enable_waf             = true
+

@@ -1,0 +1,127 @@
+name: "Terraform Destroy"
+
+# ============================================================================
+# MANUAL TRIGGER ONLY — this workflow is never triggered automatically.
+# It requires two explicit human inputs to prevent accidental destruction:
+#   1. Select the target environment from the dropdown
+#   2. Type the environment name again as a confirmation phrase
+#
+# How to run:
+#   GitHub repo → Actions → "Terraform Destroy" → "Run workflow"
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to destroy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - sit
+          - stage
+          - prod
+
+      confirm:
+        description: |
+          Type the environment name exactly to confirm (e.g. "dev").
+          This is a safety check — mismatches abort immediately.
+        required: true
+        type: string
+
+permissions:
+  id-token: write   # OIDC token exchange
+  contents: read
+
+jobs:
+  # ── Safety gate ─────────────────────────────────────────────────────────────
+  # Runs before the destroy job. Fails immediately if the typed confirmation
+  # does not exactly match the selected environment. This prevents someone
+  # from selecting "prod" but accidentally typing something else, or running
+  # the workflow without reading the warning.
+  confirm-input:
+    name: "Safety Check"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate confirmation phrase
+        run: |
+          SELECTED="${{ inputs.environment }}"
+          TYPED="${{ inputs.confirm }}"
+
+          echo "Selected environment : $SELECTED"
+          echo "Confirmation phrase  : $TYPED"
+
+          if [ "$SELECTED" != "$TYPED" ]; then
+            echo ""
+            echo "❌ ABORTED: confirmation phrase '$TYPED' does not match selected environment '$SELECTED'."
+            echo "   Re-run the workflow and type '$SELECTED' exactly in the confirmation field."
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Confirmation matches. Proceeding with destroy of: $SELECTED"
+
+  # ── Destroy ──────────────────────────────────────────────────────────────────
+  destroy:
+    name: "Destroy [${{ inputs.environment }}]"
+    runs-on: ubuntu-latest
+    needs: confirm-input   # only runs if safety check passed
+
+    environment: ${{ inputs.environment }}
+
+    defaults:
+      run:
+        working-directory: environments/${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-north-1' }}
+          role-session-name: github-actions-${{ inputs.environment }}-destroy
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.7"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      # Show exactly what will be destroyed before doing it
+      - name: Terraform Plan (destroy preview)
+        run: |
+          terraform plan \
+            -destroy \
+            -var="alarm_email=${{ secrets.ALARM_EMAIL }}" \
+            -no-color \
+            -input=false
+
+      - name: Terraform Destroy
+        run: |
+          terraform destroy \
+            -var="alarm_email=${{ secrets.ALARM_EMAIL }}" \
+            -auto-approve \
+            -input=false
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Destroy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Timestamp | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ All Terraform-managed resources in **${{ inputs.environment }}** have been destroyed." >> $GITHUB_STEP_SUMMARY
+          echo "> The S3 state bucket and DynamoDB lock table are NOT managed by Terraform and were NOT deleted." >> $GITHUB_STEP_SUMMARY
+
