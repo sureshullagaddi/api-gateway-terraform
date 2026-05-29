@@ -93,9 +93,7 @@ resource "aws_apigatewayv2_route" "routes" {
   route_key = each.key
 
   authorization_type = each.value.authorization_type
-  authorizer_id = (
-    each.value.authorization_type == "JWT" || each.value.authorization_type == "CUSTOM"
-  ) ? local.authorizer_ids[each.value.authorizer_key] : null
+  authorizer_id      = (each.value.authorization_type == "JWT" || each.value.authorization_type == "CUSTOM") ? local.authorizer_ids[each.value.authorizer_key] : null
 
   target = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
