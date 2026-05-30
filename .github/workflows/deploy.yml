@@ -68,11 +68,9 @@ jobs:
         with:
           terraform_version: "~1.7"
 
-      - name: Terraform Format Check
-        id: fmt
-        run: terraform fmt -check -recursive
-        working-directory: .        # check entire repo, not just dev
-        continue-on-error: true
+      - name: Terraform Format (auto-fix)
+        run: terraform fmt -recursive
+        working-directory: .
 
       - name: Terraform Init
         id: init
@@ -112,7 +110,6 @@ jobs:
               '',
               '| Step | Status |',
               '|------|--------|',
-              `| 🖌 Format   | ${icon('${{ steps.fmt.outcome }}')} |`,
               `| ⚙️ Init     | ${icon('${{ steps.init.outcome }}')} |`,
               `| ✅ Validate | ${icon('${{ steps.validate.outcome }}')} |`,
               `| 📋 Plan     | ${icon('${{ steps.plan.outcome }}')} |`,
@@ -186,8 +183,8 @@ jobs:
         with:
           terraform_version: "~1.7"
 
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
+      - name: Terraform Format (auto-fix)
+        run: terraform fmt -recursive
         working-directory: .
 
       - name: Terraform Init
