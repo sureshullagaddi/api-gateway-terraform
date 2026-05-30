@@ -54,7 +54,7 @@ resource "aws_apigatewayv2_authorizer" "lambda_custom" {
 
   # Cache the authorizer result for this many seconds (0 = no cache).
   # Set to 300 in prod to avoid calling the authorizer Lambda on every request.
-  authorizer_result_ttl_in_seconds = var.lambda_authorizer_cache_ttl
+  authorizer_result_ttl_in_seconds  = var.lambda_authorizer_cache_ttl
 }
 
 # Permission for API Gateway to invoke the custom authorizer Lambda
