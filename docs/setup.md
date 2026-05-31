@@ -3,6 +3,8 @@
 This guide assumes you have **nothing** — no AWS account, no tools, no GitHub repo.  
 Follow every step in order.
 
+> 📋 **Also see:** [testing.md](./testing.md) — how to test the API after deployment.
+
 ---
 
 ## Overview
@@ -127,7 +129,6 @@ Note your **Account ID** — you need it in Step 5.
 Push this code:
 ```bash
 cd /path/to/api-gateway-terraform
-
 git remote add origin https://github.com/YOUR-USERNAME/api-gateway-terraform.git
 git add .
 git commit -m "chore: initial commit"
@@ -158,7 +159,7 @@ AWS_PAGER="" bash scripts/bootstrap-state.sh
 
 > **Tip:** `AWS_PAGER=""` prevents the AWS CLI from opening a pager that pauses the script.
 
-Expected output at the end:
+Expected output:
 ```
 ✅ Bootstrap complete!
 
@@ -167,18 +168,15 @@ Expected output at the end:
    AWS_REGION   = eu-north-1
 ```
 
-**Copy the `AWS_ROLE_ARN` value.**
+**Copy the `AWS_ROLE_ARN` value — you need it in Step 6.**
 
-### Update backend.tf files (already done if bucket name matches)
-
-The script creates a bucket named `tf-state-<ACCOUNT_ID>`. All `backend.tf` files must reference this exact name:
+### Verify backend.tf bucket name matches
 
 ```bash
-# Check current bucket name in backend files
 grep bucket environments/dev/backend.tf
 ```
 
-If the name differs, update all 4:
+If the bucket name differs from what was created, update all 4 environment files:
 ```bash
 BUCKET=tf-state-$(aws sts get-caller-identity --query Account --output text)
 for env in dev sit stage prod; do
@@ -195,26 +193,24 @@ git push
 
 ### Create 4 GitHub Environments
 
-1. Go to your repo → **Settings** → **Environments** (left sidebar)
-2. Create each: **`dev`**, **`sit`**, **`stage`**, **`prod`**
+1. Repo → **Settings** → **Environments** → create: **`dev`**, **`sit`**, **`stage`**, **`prod`**
 
-> For `prod`: consider enabling **Required reviewers** — this adds a manual approval step before any prod deploy.
+> For `prod`: enable **Required reviewers** for a manual approval gate before any prod deploy.
 
 ### Add secrets to EACH environment
 
-Repeat for all 4 environments:
+Repeat for all 4:
 
-1. Click the environment name
-2. **Environment secrets** → **Add secret**
+1. Click the environment name → **Environment secrets** → **Add secret**
 
-| Secret Name | Value |
-|-------------|-------|
+| Secret | Value |
+|--------|-------|
 | `AWS_ROLE_ARN` | `arn:aws:iam::397979615352:role/github-actions-oidc-role` |
 | `ALARM_EMAIL` | `your-email@example.com` |
 
 ### Add a repository variable (optional)
 
-**Settings → Secrets and variables → Actions → Variables tab → New repository variable**
+**Settings → Secrets and variables → Actions → Variables → New repository variable**
 
 | Variable | Value |
 |----------|-------|
@@ -222,9 +218,9 @@ Repeat for all 4 environments:
 
 ---
 
-## Step 7 — Verify: Push Code and Watch the Pipeline
+## Step 7 — Push Code and Watch the Pipeline
 
-### Trigger plan-dev (non-main branch)
+### Non-main branch → plan only (no AWS changes)
 
 ```bash
 git checkout -b feature/test-pipeline
@@ -232,11 +228,10 @@ git commit --allow-empty -m "test: trigger pipeline"
 git push origin feature/test-pipeline
 ```
 
-Go to **GitHub → Actions** → you should see **Terraform Deploy** running with `Plan [dev]` job.
+Go to **GitHub → Actions** → **Terraform Deploy** → `Plan [dev]` job runs.  
+Expected: Terraform plan output — no resources created yet.
 
-Expected: plan completes showing what will be created — no AWS changes yet.
-
-### Trigger deploy (main branch)
+### Merge to main → plan + apply
 
 ```bash
 git checkout main
@@ -244,101 +239,72 @@ git merge feature/test-pipeline
 git push origin main
 ```
 
-Go to **Actions** → **Deploy [dev]** job runs → `terraform apply` creates:
+Go to **Actions** → **Deploy [dev]** runs `terraform apply` and creates:
 
 - Cognito User Pool + App Client
-- Lambda function + `live` alias (version 1)
-- API Gateway HTTP API with JWT authorizer + `GET /secure` route
-- CloudWatch log groups + 5 alarms + dashboard
-- SNS topic (WAF disabled in dev)
+- Lambda function (auto-zipped from `lambda/src/index.js`) + `live` alias
+- API Gateway HTTP API + JWT authorizer + `GET /secure` route
+- CloudWatch log groups + 5 alarms + 6-widget dashboard
+- SNS topic for alarm notifications
 
 Duration: ~2–3 minutes.
 
-### Check outputs after apply
+### Check outputs
 
 ```bash
-cd environments/dev
-terraform init
-terraform output
-```
-
-Expected:
-```
-api_endpoint         = "https://xxxx.execute-api.eu-north-1.amazonaws.com/"
-secure_endpoint      = "https://xxxx.execute-api.eu-north-1.amazonaws.com/secure"
-cognito_client_id    = "xxxxxxxxxxxx"
-cognito_user_pool_id = "eu-north-1_XXXXXXX"
-lambda_function_name = "api-demo-dev-lambda"
-lambda_version       = "1"
-dashboard_url        = "https://eu-north-1.console.aws.amazon.com/cloudwatch/..."
+terraform -chdir=environments/dev output
 ```
 
 ---
 
 ## Step 8 — Call the Deployed API
 
-### Create a test user
+> **macOS paste tip:** Always paste commands as **single lines**. Multi-line backslash commands can cause `dquote>` errors. Press `Ctrl+C` to escape that state.
+
+### Create a test user (once only)
 
 ```bash
 USER_POOL_ID=$(terraform -chdir=environments/dev output -raw cognito_user_pool_id)
 CLIENT_ID=$(terraform -chdir=environments/dev output -raw cognito_client_id)
 
-# Create user (no email — suppress welcome message)
 aws cognito-idp admin-create-user --user-pool-id $USER_POOL_ID --username test@example.com --temporary-password Temp1234! --message-action SUPPRESS --region eu-north-1
 
-# Set permanent password
 aws cognito-idp admin-set-user-password --user-pool-id $USER_POOL_ID --username test@example.com --password Perm5678@ --permanent --region eu-north-1
 ```
-
-> **Paste as single lines** — avoid multi-line backslash commands which can cause `dquote>` issues on macOS.
 
 ### Get a token
 
 ```bash
 TOKEN=$(aws cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH --client-id $CLIENT_ID --auth-parameters USERNAME=test@example.com,PASSWORD=Perm5678@ --region eu-north-1 --query AuthenticationResult.AccessToken --output text)
-
-echo "Token: ${TOKEN:0:50}..."
 ```
 
-### Call the secured endpoint
+Token is valid for **1 hour**.
+
+### Call the API
 
 ```bash
 SECURE_URL=$(terraform -chdir=environments/dev output -raw secure_endpoint)
-
 curl -s -H "Authorization: Bearer $TOKEN" -w "\nHTTP: %{http_code}\n" $SECURE_URL
 ```
 
-Expected response:
-```json
-{
-  "message": "Access granted to secure endpoint",
-  "user": { "sub": "...", "email": "test@example.com" },
-  "environment": "dev",
-  "requestId": "...",
-  "timestamp": "2026-05-31T..."
-}
-HTTP: 200
-```
-
-### Test rejection (no token)
+Expected: `HTTP: 200` with JSON response.
 
 ```bash
 curl -s -w "\nHTTP: %{http_code}\n" $SECURE_URL
 ```
 
-Expected: `{"message":"Unauthorized"}` `HTTP: 401`
+Expected: `HTTP: 401` (no token → rejected).
 
 ---
 
-## Using Postman Instead of curl
+## Using Postman
 
-### Get a token in Postman
+### Get token
 
 **POST** `https://cognito-idp.eu-north-1.amazonaws.com/`
 
-Headers:
-| Key | Value |
-|-----|-------|
+| Header | Value |
+|--------|-------|
 | `Content-Type` | `application/x-amz-json-1.1` |
 | `X-Amz-Target` | `AmazonCognitoIdentityProviderService.InitiateAuth` |
 
@@ -354,10 +320,7 @@ Body (raw JSON):
 }
 ```
 
-Copy `AuthenticationResult.AccessToken` from the response.
-
-### Auto-save token with a script (Scripts → Post-response)
-
+Post-response script (auto-saves token to environment variable):
 ```javascript
 const token = pm.response.json().AuthenticationResult.AccessToken;
 pm.environment.set("token", token);
@@ -367,9 +330,8 @@ pm.environment.set("token", token);
 
 **GET** `https://ztdsvilz58.execute-api.eu-north-1.amazonaws.com/secure`
 
-Headers:
-| Key | Value |
-|-----|-------|
+| Header | Value |
+|--------|-------|
 | `Authorization` | `Bearer {{token}}` |
 
 ---
@@ -378,25 +340,21 @@ Headers:
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `dquote>` in terminal | Unclosed quote from paste | Press `Ctrl+C`, paste command as a single line without backslashes |
-| `Could not assume role with OIDC` | `AWS_ROLE_ARN` secret missing or OIDC trust policy wrong | Check GitHub Environment secrets; re-run bootstrap with correct `GITHUB_ORG` |
-| `Bucket does not exist` during init | Backend bucket name mismatch | Update `backend.tf` files with actual bucket name |
-| `InvalidParameterException` on admin-create-user | Smart quotes from copy-paste | Type the command manually or use no quotes (no spaces in values) |
-| `401` even with valid token | Token expired (1h TTL) | Re-run `initiate-auth` to get a fresh token |
-| `403` from API Gateway | WAF blocking (sit/stage/prod) | Set `enable_waf = false` and redeploy, or whitelist your IP |
-| HCL semicolon errors | Invalid syntax | Use newlines to separate attributes — no `;` in `.tf` files |
-| `terraform fmt -check` fails | Alignment or spacing | Run `terraform fmt -recursive` locally before pushing |
+| `dquote>` in terminal | Unclosed quote from paste | Press `Ctrl+C`, paste as a single line |
+| `Could not assume role with OIDC` | `AWS_ROLE_ARN` secret wrong or missing | Check GitHub Environment secrets; verify `GITHUB_ORG` in bootstrap |
+| `Bucket does not exist` during init | Backend bucket name mismatch | Update `backend.tf` bucket name — see Step 5 |
+| `InvalidParameterException` on create-user | Smart quotes from copy-paste | Paste as single line without surrounding quotes |
+| `401` with valid token | Token expired (1h TTL) | Re-run `initiate-auth` to get a fresh token |
+| `403` from API Gateway | WAF blocking (sit/stage/prod only) | Set `enable_waf = false` and redeploy |
+| `terraform fmt` fails | Alignment/spacing in `.tf` files | Run `terraform fmt -recursive` locally before pushing |
 
 ---
 
-## Cleanup — Destroy All Resources
+## Cleanup
 
 ### Via GitHub Actions (recommended)
 
-**Actions → Terraform Destroy → Run workflow**
-- Select environment
-- Type environment name to confirm
-- Click Run
+**Actions → Terraform Destroy → Run workflow** → select environment → type name to confirm.
 
 ### Via terminal
 
@@ -405,6 +363,5 @@ cd environments/dev
 terraform destroy -var="alarm_email=any@example.com"
 ```
 
-Type `yes` when prompted.
+> The S3 bucket and DynamoDB table (bootstrap resources) are **not** Terraform-managed. Delete them manually in the AWS Console if no longer needed.
 
-> The S3 bucket and DynamoDB table (created by bootstrap) are **not** Terraform-managed — delete them manually in the AWS Console if fully done.

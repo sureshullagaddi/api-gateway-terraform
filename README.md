@@ -1,4 +1,4 @@
-# API Gateway Terraform — Production-Ready
+# API Gateway Terraform
 
 A production-grade, multi-environment AWS API Gateway deployment using Terraform modular design, GitHub Actions CI/CD with OIDC authentication, Cognito JWT authorization, CloudWatch monitoring, WAF protection, and Lambda blue/green deployments.
 
@@ -194,15 +194,18 @@ graph LR
 │   └── bootstrap-state.sh          # One-time: S3, DynamoDB, OIDC, IAM role
 ├── .gitignore
 ├── README.md
-├── SETUP.md                        # Full setup guide from zero
-└── TESTING.md                      # Complete test guide with curl + Postman
+└── docs/
+    ├── index.md                    # Docs landing page + quick links
+    ├── setup.md                    # Full setup guide from zero
+    └── testing.md                  # Complete test guide with curl + Postman
 ```
 
 ---
 
 ## Quick Start
 
-> 📖 **Starting from scratch?** Follow **[SETUP.md](./SETUP.md)** — covers everything from creating an AWS account to calling the live API.
+> 📖 **Starting from scratch?** Follow **[docs/setup.md](./docs/setup.md)** — covers everything from creating an AWS account to calling the live API.  
+> 🧪 **Testing the API?** See **[docs/testing.md](./docs/testing.md)** — curl, Postman, infrastructure checks, blue/green rollback.
 
 ```bash
 # 1. Bootstrap (one-time)
