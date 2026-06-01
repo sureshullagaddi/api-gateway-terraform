@@ -28,6 +28,7 @@ module "lambda" {
   project_name       = var.project_name
   environment        = var.environment
   log_retention_days = var.log_retention_days
+  authorizer_api_key = var.authorizer_api_key
   tags               = local.tags
 }
 
@@ -41,10 +42,10 @@ module "api_gateway" {
   client_id            = module.cognito.client_id
   aws_region           = var.aws_region
 
-  # Route & auth config — passed straight through from the environment
+  # Route & auth config — auto-wired to the authorizer Lambda created above
   routes                             = var.routes
-  lambda_authorizer_uri              = var.lambda_authorizer_uri
-  lambda_authorizer_function_name    = var.lambda_authorizer_function_name
+  lambda_authorizer_uri              = module.lambda.authorizer_invoke_arn
+  lambda_authorizer_function_name    = module.lambda.authorizer_function_name
   lambda_authorizer_identity_sources = var.lambda_authorizer_identity_sources
   lambda_authorizer_cache_ttl        = var.lambda_authorizer_cache_ttl
 

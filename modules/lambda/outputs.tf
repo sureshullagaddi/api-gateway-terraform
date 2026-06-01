@@ -18,3 +18,12 @@ output "function_version" {
   value       = aws_lambda_function.this.version
 }
 
+output "authorizer_invoke_arn" {
+  description = "Invoke ARN of the custom authorizer Lambda — use as lambda_authorizer_uri"
+  value       = aws_lambda_function.authorizer.invoke_arn
+}
+
+output "authorizer_function_name" {
+  description = "Custom authorizer Lambda function name"
+  value       = aws_lambda_function.authorizer.function_name
+}

@@ -66,14 +66,15 @@ variable "routes" {
   }
 }
 
-variable "lambda_authorizer_uri" {
-  description = "Invoke ARN of a Lambda custom authorizer function. Required when any route uses authorization_type = CUSTOM."
+variable "authorizer_api_key" {
+  description = "Secret API key the custom Lambda authorizer validates (sent by client via X-Api-Key header)"
   type        = string
-  default     = null
+  default     = "my-secret-key-123"
+  sensitive   = true
 }
 
 variable "lambda_authorizer_function_name" {
-  description = "Function name of the Lambda custom authorizer."
+  description = "Function name of the Lambda custom authorizer (auto-wired from module.lambda.authorizer_function_name)."
   type        = string
   default     = null
 }

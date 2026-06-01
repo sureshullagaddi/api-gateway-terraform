@@ -23,3 +23,10 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "authorizer_api_key" {
+  description = "Secret API key the custom Lambda authorizer validates (passed via X-Api-Key header)"
+  type        = string
+  default     = "my-secret-key-123"
+  sensitive   = true
+}

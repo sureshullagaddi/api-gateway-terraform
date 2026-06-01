@@ -53,3 +53,10 @@ variable "enable_waf" {
   type        = bool
   default     = false # off in dev — enable in prod to save cost during development
 }
+
+variable "authorizer_api_key" {
+  description = "Secret API key the custom Lambda authorizer validates"
+  type        = string
+  default     = "my-secret-key-123"
+  sensitive   = true
+}

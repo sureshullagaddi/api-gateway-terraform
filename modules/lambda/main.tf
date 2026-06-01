@@ -36,6 +36,59 @@ resource "aws_iam_role_policy_attachment" "xray" {
   policy_arn = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 }
 
+# ── Custom Authorizer Lambda ───────────────────────────────────────────────────
+# Separate function from the main handler — authorizer runs BEFORE main Lambda.
+# Packaged from the same lambda/src/ directory but uses authorizer.handler.
+
+resource "aws_cloudwatch_log_group" "authorizer" {
+  name              = "/aws/lambda/${local.function_name}-authorizer"
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
+}
+
+resource "aws_iam_role" "authorizer" {
+  name = "${local.function_name}-authorizer-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "authorizer_basic_execution" {
+  role       = aws_iam_role.authorizer.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_lambda_function" "authorizer" {
+  function_name    = "${local.function_name}-authorizer"
+  role             = aws_iam_role.authorizer.arn
+  runtime          = "nodejs18.x"
+  handler          = "authorizer.handler"           # ← authorizer.js exports.handler
+  filename         = data.archive_file.lambda.output_path
+  source_code_hash = data.archive_file.lambda.output_base64sha256
+
+  environment {
+    variables = {
+      ENVIRONMENT   = var.environment
+      VALID_API_KEY = var.authorizer_api_key  # ← secret key clients must send
+    }
+  }
+
+  tags = var.tags
+
+  depends_on = [
+    aws_iam_role_policy_attachment.authorizer_basic_execution,
+    aws_cloudwatch_log_group.authorizer,
+  ]
+}
+
 # ── Package source → zip automatically on every plan/apply ───────────────────
 data "archive_file" "lambda" {
   type        = "zip"
