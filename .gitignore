@@ -17,6 +17,10 @@ terraform.tfvars
 lambda/lambda.zip
 lambda/**/*.zip
 
+# node_modules installed by CI before terraform packages the zip
+# Never commit — npm ci --omit=dev installs them fresh in CI
+lambda/src/node_modules/
+
 # ── OS / Editor ──────────────────────────────────────────────────────────────
 .DS_Store
 .idea/

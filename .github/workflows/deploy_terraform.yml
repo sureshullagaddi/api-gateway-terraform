@@ -103,6 +103,17 @@ jobs:
         with:
           terraform_version: "~1.7"
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: lambda/src/package.json
+
+      - name: Install Lambda dependencies
+        run: npm install --omit=dev
+        working-directory: lambda/src
+
       - name: Terraform Format (auto-fix)
         run: terraform fmt -recursive
         working-directory: .
@@ -201,6 +212,17 @@ jobs:
         with:
           terraform_version: "~1.7"
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: lambda/src/package.json
+
+      - name: Install Lambda dependencies
+        run: npm install --omit=dev
+        working-directory: lambda/src
+
       - name: Terraform Format (auto-fix)
         run: terraform fmt -recursive
         working-directory: .
@@ -253,6 +275,17 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "~1.7"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: lambda/src/package.json
+
+      - name: Install Lambda dependencies
+        run: npm install --omit=dev
+        working-directory: lambda/src
 
       - name: Terraform Format (auto-fix)
         run: terraform fmt -recursive

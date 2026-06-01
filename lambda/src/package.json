@@ -1,0 +1,21 @@
+{
+  "name": "banking-api-lambda",
+  "version": "1.0.0",
+  "description": "Lambda functions for the Banking API — main handler, custom authorizer, and internal SigV4 caller",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/client-secrets-manager": "^3.374.0",
+    "@aws-sdk/protocol-http": "^3.374.0",
+    "@aws-sdk/signature-v4": "^3.374.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"No tests defined\" && exit 0"
+  },
+  "license": "MIT"
+}
+

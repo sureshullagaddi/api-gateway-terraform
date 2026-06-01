@@ -62,7 +62,8 @@ variable "routes" {
     authorizer_key     = optional(string, null)
   }))
   default = {
-    "GET /secure" = { authorization_type = "JWT", authorizer_key = "jwt" }
+    "GET /secure"   = { authorization_type = "JWT",     authorizer_key = "jwt"    }
+    "GET /internal" = { authorization_type = "AWS_IAM", authorizer_key = null     }
   }
 }
 
@@ -86,7 +87,7 @@ variable "lambda_authorizer_identity_sources" {
 }
 
 variable "lambda_authorizer_cache_ttl" {
-  description = "Seconds to cache the Lambda authorizer result."
+  description = "Seconds to cache the Lambda authorizer result. 0=no cache (costly), 300=recommended for prod (98% cost reduction on authorizer Lambda)."
   type        = number
-  default     = 0
+  default     = 300 # cache for 5 minutes — same key won't invoke authorizer Lambda again
 }

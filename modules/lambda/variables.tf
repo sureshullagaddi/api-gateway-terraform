@@ -30,3 +30,15 @@ variable "authorizer_api_key" {
   default     = "my-secret-key-123"
   sensitive   = true
 }
+
+variable "api_execution_arn" {
+  description = "Execution ARN of the API Gateway — used to scope the internal caller's execute-api:Invoke permission (created in stack module to avoid circular dependency)"
+  type        = string
+  default     = "*" # overridden in stack module after api_gateway is created
+}
+
+variable "api_host" {
+  description = "Hostname of the API Gateway (without https://) — passed to internal-caller Lambda as API_HOST env var"
+  type        = string
+  default     = "" # overridden in stack module after api_gateway is created
+}

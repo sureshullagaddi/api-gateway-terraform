@@ -37,3 +37,13 @@ output "partner_api_key_secret_name" {
   description = "Name of the Secrets Manager secret (view in AWS Console)"
   value       = aws_secretsmanager_secret.partner_api_key.name
 }
+
+output "internal_caller_function_name" {
+  description = "Internal caller Lambda function name — invoke this to test AWS_IAM SigV4 flow"
+  value       = aws_lambda_function.internal_caller.function_name
+}
+
+output "internal_caller_role_name" {
+  description = "IAM role name of the internal caller Lambda — used in stack to attach the execute-api:Invoke policy"
+  value       = aws_iam_role.internal_caller.name
+}

@@ -29,6 +29,8 @@ module "lambda" {
   environment        = var.environment
   log_retention_days = var.log_retention_days
   authorizer_api_key = var.authorizer_api_key
+  # Strip "https://" from api_endpoint to get hostname for internal-caller env var
+  api_host           = replace(module.api_gateway.api_endpoint, "https://", "")
   tags               = local.tags
 }
 
@@ -66,5 +68,24 @@ module "monitoring" {
   alarm_email          = var.alarm_email
   aws_region           = var.aws_region
   tags                 = local.tags
+}
+
+# ── Scoped execute-api:Invoke policy for the internal caller Lambda ─────────────
+# Created here (not inside modules/lambda) to avoid circular dependency:
+#   api_gateway module needs Lambda ARNs → Lambda module needs api_gateway outputs
+# Both module outputs are available at the stack level after Terraform resolves deps.
+resource "aws_iam_role_policy" "internal_caller_invoke" {
+  name = "${var.project_name}-${var.environment}-lambda-internal-caller-invoke-policy"
+  role = module.lambda.internal_caller_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "AllowInvokeInternalRoute"
+      Effect   = "Allow"
+      Action   = "execute-api:Invoke"
+      Resource = "${module.api_gateway.execution_arn}/*/GET/internal"
+    }]
+  })
 }
 

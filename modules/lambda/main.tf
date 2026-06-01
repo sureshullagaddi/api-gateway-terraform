@@ -88,6 +88,7 @@ resource "aws_lambda_function" "authorizer" {
   handler          = "authorizer.handler"
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
+  architectures    = ["arm64"] # Graviton2 — 20% cheaper + faster cold starts
 
   environment {
     variables = {
@@ -137,6 +138,7 @@ resource "aws_lambda_function" "this" {
   handler          = "index.handler"
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
+  architectures    = ["arm64"] # Graviton2 — 20% cheaper + faster cold starts
 
   # publish = true creates a new numbered version on every code/config change.
   # This is the foundation for blue/green and canary deployments.
@@ -172,4 +174,63 @@ resource "aws_lambda_alias" "live" {
   name             = "live"
   function_name    = aws_lambda_function.this.function_name
   function_version = aws_lambda_function.this.version
+}
+
+# ── Internal Caller Lambda (AWS_IAM / SigV4 demo) ─────────────────────────────
+# This Lambda represents an internal AWS service that calls GET /internal
+# using SigV4 signing — no API key, no Cognito token.
+# Invoke it directly to test the AWS_IAM auth flow end-to-end.
+
+resource "aws_cloudwatch_log_group" "internal_caller" {
+  name              = "/aws/lambda/${local.function_name}-internal-caller"
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
+}
+
+resource "aws_iam_role" "internal_caller" {
+  name = "${local.function_name}-internal-caller-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "internal_caller_basic" {
+  role       = aws_iam_role.internal_caller.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Grant this Lambda permission to call GET /internal on the API Gateway
+# NOTE: The scoped policy is created in modules/stack/main.tf to avoid
+# circular dependency (lambda needs api_gw ARN, api_gw needs lambda ARN)
+resource "aws_lambda_function" "internal_caller" {
+  function_name    = "${local.function_name}-internal-caller"
+  role             = aws_iam_role.internal_caller.arn
+  runtime          = "nodejs18.x"
+  handler          = "internal-caller.handler"
+  filename         = data.archive_file.lambda.output_path
+  source_code_hash = data.archive_file.lambda.output_base64sha256
+  architectures    = ["arm64"]
+  timeout          = 30
+
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+      API_HOST    = var.api_host  # hostname of API GW — passed from stack after api_gw created
+    }
+  }
+
+  tags = var.tags
+
+  depends_on = [
+    aws_iam_role_policy_attachment.internal_caller_basic,
+    aws_cloudwatch_log_group.internal_caller,
+  ]
 }

@@ -4,14 +4,20 @@
  * Main Lambda handler — simulates a Banking API backend.
  *
  * Routes:
- *   GET /secure  → Customer banking portal (JWT auth via Cognito)
- *                  Returns account balance + recent transactions for the logged-in user
+ *   GET /secure    → Customer banking portal (JWT auth via Cognito)
+ *                    Returns account balance + recent transactions for the logged-in user
  *
- *   GET /admin   → Partner bank B2B integration (Custom Lambda auth via X-Api-Key)
- *                  Returns system-wide stats — only trusted partners can access
+ *   GET /admin     → Partner bank B2B integration (Custom Lambda auth via X-Api-Key)
+ *                    Returns system-wide stats — only trusted partners can access
  *
- *   GET /health  → Public health check (no auth)
- *                  Returns service status — used by load balancers / monitoring
+ *   GET /health    → Public health check (no auth)
+ *                    Returns service status — used by load balancers / monitoring
+ *
+ *   GET /internal  → Internal AWS service-to-service call (AWS_IAM / SigV4 auth)
+ *                    Returns internal system metrics — only AWS IAM roles can access.
+ *                    Caller must sign the request with SigV4 using their IAM credentials.
+ *                    API Gateway validates the signature against IAM before forwarding.
+ *                    No API key, no Cognito token — identity is the IAM role itself.
  */
 exports.handler = async (event) => {
   console.log('[HANDLER] ====== Incoming Request ======');
@@ -80,6 +86,36 @@ exports.handler = async (event) => {
         environment: process.env.ENVIRONMENT,
         requestId,
         timestamp:   new Date().toISOString(),
+      });
+    }
+
+    // ── Route: GET /internal — Internal AWS service (AWS_IAM / SigV4) ────────
+    // API Gateway has already verified the SigV4 signature against IAM before
+    // reaching here. The caller's IAM identity is available in the authorizer
+    // context. No API key, no Cognito token — IAM role IS the identity.
+    if (path === '/internal') {
+      // API GW v2 (HTTP API) puts IAM context under requestContext.authorizer.iam
+      const iamContext = authorizer?.iam ?? {};
+      const callerArn  = iamContext.userArn ?? iamContext.callerArn ?? 'unknown';
+
+      console.log('[HANDLER] Auth method: AWS_IAM (SigV4)');
+      console.log('[HANDLER] Caller ARN :', callerArn);
+      console.log('[HANDLER] IAM context:', JSON.stringify(iamContext, null, 2));
+
+      // Simulate internal metrics — only accessible to trusted AWS services
+      // In production: read from internal DynamoDB tables, SQS queue depths, etc.
+      const internalMetrics = getMockInternalMetrics();
+
+      return respond(200, {
+        authMethod:      'aws-iam-sigv4',
+        message:         'Internal route — AWS IAM identity verified',
+        callerArn,
+        iamUserId:       iamContext.userId       ?? 'n/a',
+        iamPrincipalId:  iamContext.principalId  ?? 'n/a',
+        metrics:         internalMetrics,
+        environment:     process.env.ENVIRONMENT,
+        requestId,
+        timestamp:       new Date().toISOString(),
       });
     }
 
@@ -168,3 +204,32 @@ function getMockSystemStats() {
     partnerBanks:         ['NORDEA', 'SEB', 'SWEDBANK', 'HANDELSBANKEN'],
   };
 }
+
+/**
+ * Simulate internal system metrics — only visible to trusted AWS IAM roles.
+ * In production: read from internal DynamoDB tables, SQS queue depths, ECS task counts, etc.
+ */
+function getMockInternalMetrics() {
+  return {
+    batchJobs: {
+      queueDepth:       7,
+      processingRate:   '1200 tx/min',
+      failedLast1h:     0,
+      nextScheduledRun: '2026-06-01T14:00:00Z',
+    },
+    internalServices: {
+      fraudDetection:  'HEALTHY',
+      settlementEngine:'HEALTHY',
+      auditLogger:     'HEALTHY',
+      archiver:        'DEGRADED — 2 retries',
+    },
+    infrastructure: {
+      ecsTaskCount:    12,
+      rdsConnections:  34,
+      cacheHitRate:    '94.7%',
+      dlqMessages:     0,
+    },
+    dataClassification: 'INTERNAL — not for external exposure',
+  };
+}
+

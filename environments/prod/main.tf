@@ -19,4 +19,11 @@ module "stack" {
   throttling_rate_limit  = var.throttling_rate_limit
   waf_rate_limit         = var.waf_rate_limit
   enable_waf             = var.enable_waf
+
+  routes = {
+    "GET /secure"   = { authorization_type = "JWT",     authorizer_key = "jwt"    }
+    "GET /admin"    = { authorization_type = "CUSTOM",  authorizer_key = "lambda" }
+    "GET /health"   = { authorization_type = "NONE",    authorizer_key = null     }
+    "GET /internal" = { authorization_type = "AWS_IAM", authorizer_key = null     }
+  }
 }

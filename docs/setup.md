@@ -71,6 +71,23 @@ node --version
 # Expected: v18.x.x
 ```
 
+#### AWS SDK packages for the internal-caller Lambda
+
+The `internal-caller.js` Lambda signs HTTP requests with SigV4. It requires these packages
+(installed inside `lambda/src/` so they are packaged into the zip by Terraform):
+
+```bash
+cd lambda/src
+npm init -y
+npm install @aws-sdk/protocol-http @aws-sdk/signature-v4 @aws-crypto/sha256-js
+```
+
+> **Why these?** `@aws-sdk/signature-v4` is the v3 standalone signing utility — it works
+> in Lambda without pulling in the entire SDK. `@aws-crypto/sha256-js` is the pure-JS
+> SHA-256 implementation required by the signer in Lambda's Node.js environment.
+> The built-in Lambda environment does NOT include `@aws-sdk/signature-v4` — it must be
+> bundled in your deployment package.
+
 ### Git
 ```bash
 brew install git

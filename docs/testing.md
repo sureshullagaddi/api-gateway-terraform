@@ -13,6 +13,7 @@ API_ENDPOINT=$(terraform -chdir=environments/dev output -raw api_endpoint)
 USER_POOL_ID=$(terraform -chdir=environments/dev output -raw cognito_user_pool_id)
 CLIENT_ID=$(terraform -chdir=environments/dev output -raw cognito_client_id)
 LAMBDA_NAME=$(terraform -chdir=environments/dev output -raw lambda_function_name)
+INTERNAL_CALLER=$(terraform -chdir=environments/dev output -raw internal_caller_function_name)
 ```
 
 Verify:
@@ -147,7 +148,80 @@ Expected: `{"message":"Unauthorized"}` `HTTP: 401`
 
 ---
 
-## Test 4 — Full Matrix
+## Test 4 — AWS IAM Route (GET /internal) — SigV4 Auth
+
+The `/internal` route uses `AWS_IAM` authorisation. The caller must sign the HTTP request
+with [Signature Version 4 (SigV4)](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html) using valid AWS credentials that have `execute-api:Invoke` permission on the route.
+
+The `internal-caller` Lambda is deployed **for exactly this purpose**: it uses its own IAM role credentials
+(automatically injected by the Lambda runtime) to sign and send the request.
+
+### 4a — Invoke the internal caller Lambda → 200 end-to-end
+
+```bash
+aws lambda invoke --function-name $INTERNAL_CALLER --region eu-north-1 --payload '{}' /tmp/internal-response.json && cat /tmp/internal-response.json
+```
+
+Expected response (the caller Lambda returns what the /internal API returned):
+```json
+{
+  "callerFunction": "api-demo-dev-lambda-internal-caller",
+  "callerRegion": "eu-north-1",
+  "targetEndpoint": "https://xxlanjoh4c.execute-api.eu-north-1.amazonaws.com/internal",
+  "authMethod": "aws-iam-sigv4",
+  "responseStatus": 200,
+  "responseBody": {
+    "authMethod": "aws-iam-sigv4",
+    "message": "Internal route — AWS IAM identity verified",
+    "callerArn": "arn:aws:sts::123456789012:assumed-role/api-demo-dev-lambda-internal-caller-role/...",
+    "metrics": { "batchJobs": { ... }, "internalServices": { ... } }
+  }
+}
+```
+
+### 4b — Direct curl without SigV4 → 403 Forbidden
+
+```bash
+curl -s -w "\nHTTP: %{http_code}\n" ${API_ENDPOINT}internal
+```
+
+Expected: `{"message":"Forbidden"}` `HTTP: 403`
+
+This proves API Gateway is enforcing IAM auth — unsigned requests are rejected **before** reaching Lambda.
+
+### 4c — Signed curl using AWS CLI credentials (advanced)
+
+If you have credentials with `execute-api:Invoke` on the /internal route:
+
+```bash
+# Install aws-sigv4 curl helper or use Python:
+python3 - <<'EOF'
+import boto3, requests
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+
+session  = boto3.Session()
+creds    = session.get_credentials().get_frozen_credentials()
+region   = session.region_name or 'eu-north-1'
+url      = 'https://YOUR_API_ID.execute-api.eu-north-1.amazonaws.com/internal'
+
+req = AWSRequest(method='GET', url=url)
+SigV4Auth(creds, 'execute-api', region).add_auth(req)
+resp = requests.get(url, headers=dict(req.headers))
+print(resp.status_code, resp.json())
+EOF
+```
+
+### Why not curl directly?
+
+`curl` cannot sign SigV4 natively. You need either:
+- AWS SDK (`@aws-sdk/signature-v4` in Node.js, `boto3`+`botocore` in Python)
+- AWS CLI's built-in signing (`aws apigatewayv2` calls)
+- The deployed `internal-caller` Lambda (the easiest option — Test 4a above)
+
+---
+
+## Test 5 — Full Matrix
 
 Run all routes at once:
 
@@ -158,6 +232,8 @@ echo "=== /secure no token (expect 401) ===" && curl -s -w "HTTP: %{http_code}\n
 echo "=== /admin correct key (expect 200) ===" && curl -s -H "X-Api-Key: my-secret-key-123" -w "HTTP: %{http_code}\n" ${API_ENDPOINT}admin
 echo "=== /admin wrong key (expect 403) ===" && curl -s -H "X-Api-Key: wrong" -w "HTTP: %{http_code}\n" ${API_ENDPOINT}admin
 echo "=== /admin no key (expect 401) ===" && curl -s -w "HTTP: %{http_code}\n" ${API_ENDPOINT}admin
+echo "=== /internal via IAM caller Lambda (expect 200 end-to-end) ===" && aws lambda invoke --function-name $INTERNAL_CALLER --region eu-north-1 --payload '{}' /tmp/i.json && cat /tmp/i.json
+echo "=== /internal direct curl no sig (expect 403) ===" && curl -s -w "HTTP: %{http_code}\n" ${API_ENDPOINT}internal
 ```
 
 ---
@@ -219,7 +295,7 @@ API_ID=$(aws apigatewayv2 get-apis --region eu-north-1 --query "Items[?contains(
 aws apigatewayv2 get-routes --api-id $API_ID --region eu-north-1 --query "Items[*].{Route:RouteKey,Auth:AuthorizationType}"
 ```
 
-Expected: 3 routes — `GET /secure` (JWT), `GET /admin` (CUSTOM), `GET /health` (NONE)
+Expected: 4 routes — `GET /secure` (JWT), `GET /admin` (CUSTOM), `GET /health` (NONE), `GET /internal` (AWS_IAM)
 
 ### Authorizer configuration
 
@@ -364,6 +440,8 @@ No headers needed.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
+| `403` on /internal via direct curl | No SigV4 signature — API GW rejects unsigned IAM-auth requests | Invoke the `internal-caller` Lambda or sign the request with AWS SDK |
+| `403` on /internal via caller Lambda | Caller Lambda role missing `execute-api:Invoke` permission | Run `terraform apply` — the `aws_iam_role_policy.internal_caller_invoke` resource grants it |
 | `401` with valid token | Token expired (1h) or using AccessToken | Re-run `initiate-auth`, use `IdToken` not `AccessToken` |
 | `403` on /admin with correct key | Wrong API key value | Check `authorizer_api_key` variable in Terraform |
 | `500` on /admin | `enable_simple_responses` not set | Verify `enable_simple_responses = true` in Terraform authorizer resource |

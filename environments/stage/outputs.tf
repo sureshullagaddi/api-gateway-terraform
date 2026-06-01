@@ -46,3 +46,13 @@ output "sns_topic_arn" {
   description = "CloudWatch alarms SNS topic ARN"
   value       = module.stack.sns_topic_arn
 }
+
+output "internal_caller_function_name" {
+  description = "Internal caller Lambda — invoke to test GET /internal AWS_IAM SigV4 flow"
+  value       = module.stack.internal_caller_function_name
+}
+
+output "internal_caller_invoke_command" {
+  description = "Ready-to-run CLI command to test the full AWS_IAM SigV4 flow"
+  value       = module.stack.internal_caller_invoke_command
+}

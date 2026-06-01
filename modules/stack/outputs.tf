@@ -60,3 +60,12 @@ output "sns_topic_arn" {
   value       = module.monitoring.sns_topic_arn
 }
 
+output "internal_caller_function_name" {
+  description = "Internal caller Lambda function name — invoke this to test GET /internal AWS_IAM SigV4 flow"
+  value       = module.lambda.internal_caller_function_name
+}
+
+output "internal_caller_invoke_command" {
+  description = "AWS CLI command to trigger the internal caller Lambda and test the full AWS_IAM SigV4 flow"
+  value       = "aws lambda invoke --function-name ${module.lambda.internal_caller_function_name} --region ${var.aws_region} --payload '{}' /tmp/response.json && cat /tmp/response.json"
+}
