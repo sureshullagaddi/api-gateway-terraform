@@ -1,0 +1,239 @@
+name: "🏭 API Factory — Provision New API"
+
+# ============================================================================
+# Self-service API provisioning workflow.
+#
+# Fill in the form below and click "Run workflow" to create a fully
+# configured API Gateway + Lambda stack in minutes.
+#
+# Each provisioned API:
+#   - Gets its own isolated Terraform state (api-factory/<api_name>/terraform.tfstate)
+#   - Can be destroyed independently via the "API Factory — Destroy" workflow
+#   - Reuses the same Lambda code (lambda/src/) as the main stack
+#
+# Supported API types:
+#   http-jwt          → HTTP API v2 + Cognito JWT auth (customer-facing)
+#   http-custom-key   → HTTP API v2 + Lambda X-Api-Key auth (partner B2B)
+#   http-iam          → HTTP API v2 + AWS_IAM SigV4 (internal services)
+#   http-public       → HTTP API v2 + no auth (public endpoints)
+#   rest-usage-plan   → REST API v1 + per-partner daily quota + rate limit
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_name:
+        description: |
+          API name — unique identifier for this API.
+          Used as resource prefix. Lowercase, hyphens allowed.
+          Examples: payments, transfers, loans, partner-hsbc
+        required: true
+        type: string
+
+      api_type:
+        description: |
+          API type + auth method:
+          • http-jwt          → Cognito JWT (customer portal)
+          • http-custom-key   → X-Api-Key header (partner B2B)
+          • http-iam          → AWS_IAM SigV4 (internal service)
+          • http-public       → No auth (public endpoint)
+          • rest-usage-plan   → REST API with per-partner quota
+        required: true
+        type: choice
+        options:
+          - http-jwt
+          - http-custom-key
+          - http-iam
+          - http-public
+          - rest-usage-plan
+
+      route_path:
+        description: |
+          Route path (must start with /).
+          Examples: /payments, /transfers, /loans/summary
+        required: true
+        type: string
+        default: "/data"
+
+      http_method:
+        description: "HTTP method for the route"
+        required: true
+        type: choice
+        default: "GET"
+        options:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - sit
+          - stage
+          - prod
+
+      partner_name:
+        description: |
+          [REST API only] Partner name (e.g. hsbc, barclays, handelsbanken).
+          Ignored for HTTP API types.
+        required: false
+        type: string
+        default: "partner"
+
+      quota_per_day:
+        description: |
+          [REST API only] Daily request quota per partner key.
+          AWS returns 429 automatically when exceeded.
+          Ignored for HTTP API types.
+        required: false
+        type: string
+        default: "5000"
+
+      rate_limit_per_second:
+        description: |
+          [REST API only] Rate limit in requests/second (burst = 2x).
+          Ignored for HTTP API types.
+        required: false
+        type: string
+        default: "50"
+
+      confirm:
+        description: |
+          Type the api_name exactly to confirm.
+          Mismatches abort immediately — nothing is deployed.
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ── Safety check ─────────────────────────────────────────────────────────────
+  confirm-input:
+    name: "🔒 Safety Check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify confirmation matches api_name
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "${{ github.event.inputs.api_name }}" ]; then
+            echo "❌ Confirmation '${{ github.event.inputs.confirm }}' does not match api_name '${{ github.event.inputs.api_name }}'"
+            echo "   Aborting — nothing was deployed."
+            exit 1
+          fi
+          echo "✅ Confirmed: '${{ github.event.inputs.api_name }}'"
+          echo "   Type  : ${{ github.event.inputs.api_type }}"
+          echo "   Route : ${{ github.event.inputs.http_method }} ${{ github.event.inputs.route_path }}"
+          echo "   Env   : ${{ github.event.inputs.environment }}"
+
+  # ── Provision ─────────────────────────────────────────────────────────────────
+  provision:
+    name: "🚀 Provision [${{ github.event.inputs.api_name }}] [${{ github.event.inputs.api_type }}]"
+    runs-on: ubuntu-latest
+    needs: confirm-input
+    environment: ${{ github.event.inputs.environment }}
+
+    defaults:
+      run:
+        working-directory: environments/api-factory
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-north-1' }}
+          role-session-name: api-factory-${{ github.event.inputs.api_name }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.7"
+
+      - name: Setup Node.js + install Lambda dependencies
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install Lambda dependencies
+        run: npm install --omit=dev
+        working-directory: lambda/src
+
+      - name: Terraform Format check
+        run: terraform fmt -check -recursive
+        working-directory: .
+        continue-on-error: true
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=tf-state-397979615352" \
+            -backend-config="key=api-factory/${{ github.event.inputs.api_name }}/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION || 'eu-north-1' }}" \
+            -backend-config="dynamodb_table=terraform-lock" \
+            -backend-config="encrypt=true" \
+            -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="api_name=${{ github.event.inputs.api_name }}" \
+            -var="api_type=${{ github.event.inputs.api_type }}" \
+            -var="route_path=${{ github.event.inputs.route_path }}" \
+            -var="http_method=${{ github.event.inputs.http_method }}" \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="partner_name=${{ github.event.inputs.partner_name }}" \
+            -var="quota_per_day=${{ github.event.inputs.quota_per_day }}" \
+            -var="rate_limit_per_second=${{ github.event.inputs.rate_limit_per_second }}" \
+            -var="alarm_email=${{ secrets.ALARM_EMAIL }}" \
+            -var="api_key_value=${{ secrets.FACTORY_API_KEY || 'my-secret-key-123' }}" \
+            -out=tfplan \
+            -input=false \
+            -no-color
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Capture Outputs
+        if: github.ref == 'refs/heads/main'
+        id: outputs
+        run: |
+          echo "## 🚀 API Provisioned Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **API Name** | \`${{ github.event.inputs.api_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **API Type** | \`${{ github.event.inputs.api_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Route** | \`${{ github.event.inputs.http_method }} ${{ github.event.inputs.route_path }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | \`${{ github.event.inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Endpoints" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          terraform output -no-color 2>/dev/null | grep -v sensitive || true
+          terraform output -no-color 2>/dev/null | grep -v sensitive >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### To get sensitive outputs (API keys):" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "terraform -chdir=environments/api-factory output -raw partner_api_key" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Apply Skipped (not on main)
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "⚠️  Plan completed but Apply was SKIPPED — trigger from main branch to deploy."
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Apply skipped** — trigger this workflow from the \`main\` branch to actually deploy." >> $GITHUB_STEP_SUMMARY
+
