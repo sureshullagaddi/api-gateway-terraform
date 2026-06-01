@@ -32,6 +32,6 @@ output "jwt_authorizer_id" {
 }
 
 output "lambda_authorizer_id" {
-  description = "ID of the Lambda custom authorizer (null when not configured)"
-  value       = var.lambda_authorizer_uri != null ? aws_apigatewayv2_authorizer.lambda_custom[0].id : null
+  description = "ID of the Lambda custom authorizer"
+  value       = aws_apigatewayv2_authorizer.lambda_custom.id
 }
