@@ -228,7 +228,7 @@ git commit --allow-empty -m "test: trigger pipeline"
 git push origin feature/test-pipeline
 ```
 
-Go to **GitHub → Actions** → **Terraform Deploy** → `Plan [dev]` job runs.  
+Go to **GitHub → Actions** → **Terraform Deploy** → `Plan [dev]` job runs.
 Expected: Terraform plan output — no resources created yet.
 
 ### Merge to main → plan + apply
@@ -242,8 +242,11 @@ git push origin main
 Go to **Actions** → **Deploy [dev]** runs `terraform apply` and creates:
 
 - Cognito User Pool + App Client
-- Lambda function (auto-zipped from `lambda/src/index.js`) + `live` alias
-- API Gateway HTTP API + JWT authorizer + `GET /secure` route
+- Lambda functions (main + authorizer, auto-zipped from `lambda/src/`) + `live` alias
+- API Gateway HTTP API with 3 routes:
+  - `GET /secure` — JWT authorizer (Cognito)
+  - `GET /admin` — Custom Lambda authorizer (X-Api-Key)
+  - `GET /health` — No auth (public)
 - CloudWatch log groups + 5 alarms + 6-widget dashboard
 - SNS topic for alarm notifications
 
@@ -255,45 +258,64 @@ Duration: ~2–3 minutes.
 terraform -chdir=environments/dev output
 ```
 
+> ⚠️ **Always use `terraform output` to get the current API URL** — the endpoint changes each time the API Gateway is recreated by Terraform.
+
 ---
 
 ## Step 8 — Call the Deployed API
 
-> **macOS paste tip:** Always paste commands as **single lines**. Multi-line backslash commands can cause `dquote>` errors. Press `Ctrl+C` to escape that state.
+> **macOS paste tip:** Always paste commands as **single lines**. Multi-line backslash commands cause `dquote>` errors. Press `Ctrl+C` to escape.
+
+### Get current values
+
+```bash
+API_ENDPOINT=$(terraform -chdir=environments/dev output -raw api_endpoint)
+USER_POOL_ID=$(terraform -chdir=environments/dev output -raw cognito_user_pool_id)
+CLIENT_ID=$(terraform -chdir=environments/dev output -raw cognito_client_id)
+```
+
+### Test the public route (no token needed)
+
+```bash
+curl -s -w "\nHTTP: %{http_code}\n" ${API_ENDPOINT}health
+```
+
+Expected: `HTTP: 200`
 
 ### Create a test user (once only)
 
 ```bash
-USER_POOL_ID=$(terraform -chdir=environments/dev output -raw cognito_user_pool_id)
-CLIENT_ID=$(terraform -chdir=environments/dev output -raw cognito_client_id)
-
 aws cognito-idp admin-create-user --user-pool-id $USER_POOL_ID --username test@example.com --temporary-password Temp1234! --message-action SUPPRESS --region eu-north-1
-
 aws cognito-idp admin-set-user-password --user-pool-id $USER_POOL_ID --username test@example.com --password Perm5678@ --permanent --region eu-north-1
 ```
 
-### Get a token
+### Get an IdToken
 
 ```bash
-TOKEN=$(aws cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH --client-id $CLIENT_ID --auth-parameters USERNAME=test@example.com,PASSWORD=Perm5678@ --region eu-north-1 --query AuthenticationResult.AccessToken --output text)
+TOKEN=$(aws cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH --client-id $CLIENT_ID --auth-parameters USERNAME=test@example.com,PASSWORD=Perm5678@ --region eu-north-1 --query AuthenticationResult.IdToken --output text)
 ```
+
+> ⚠️ Use `IdToken` not `AccessToken` — only `IdToken` carries the `email` claim needed by the JWT authorizer.
 
 Token is valid for **1 hour**.
 
-### Call the API
+### Call the JWT-protected route
 
 ```bash
-SECURE_URL=$(terraform -chdir=environments/dev output -raw secure_endpoint)
-curl -s -H "Authorization: Bearer $TOKEN" -w "\nHTTP: %{http_code}\n" $SECURE_URL
+curl -s -H "Authorization: Bearer $TOKEN" -w "\nHTTP: %{http_code}\n" ${API_ENDPOINT}secure
 ```
 
-Expected: `HTTP: 200` with JSON response.
+Expected: `HTTP: 200` with JSON showing `authMethod: "jwt"` and your email.
+
+### Call the custom-auth route
 
 ```bash
-curl -s -w "\nHTTP: %{http_code}\n" $SECURE_URL
+curl -s -H "X-Api-Key: my-secret-key-123" -w "\nHTTP: %{http_code}\n" ${API_ENDPOINT}admin
 ```
 
-Expected: `HTTP: 401` (no token → rejected).
+Expected: `HTTP: 200` with JSON showing `authMethod: "custom"`.
+
+> See **[testing.md](./testing.md)** for the complete test matrix including negative tests.
 
 ---
 
@@ -306,13 +328,13 @@ Expected: `HTTP: 401` (no token → rejected).
 | Header | Value |
 |--------|-------|
 | `Content-Type` | `application/x-amz-json-1.1` |
-| `X-Amz-Target` | `AmazonCognitoIdentityProviderService.InitiateAuth` |
+| `X-Amz-Target` | `AWSCognitoIdentityProviderService.InitiateAuth` |
 
 Body (raw JSON):
 ```json
 {
   "AuthFlow": "USER_PASSWORD_AUTH",
-  "ClientId": "59sg1etok9amjiq0vhi6h5bosj",
+  "ClientId": "<your-cognito_client_id from terraform output>",
   "AuthParameters": {
     "USERNAME": "test@example.com",
     "PASSWORD": "Perm5678@"
@@ -320,19 +342,33 @@ Body (raw JSON):
 }
 ```
 
-Post-response script (auto-saves token to environment variable):
+Tests tab (auto-saves token):
 ```javascript
-const token = pm.response.json().AuthenticationResult.AccessToken;
-pm.environment.set("token", token);
+const res = pm.response.json();
+pm.environment.set("token", res.AuthenticationResult.IdToken);
 ```
 
-### Call the API
+### Call GET /secure (JWT auth)
 
-**GET** `https://ztdsvilz58.execute-api.eu-north-1.amazonaws.com/secure`
+**GET** `<api_endpoint from terraform output>secure`
 
 | Header | Value |
 |--------|-------|
 | `Authorization` | `Bearer {{token}}` |
+
+### Call GET /admin (Custom auth)
+
+**GET** `<api_endpoint from terraform output>admin`
+
+| Header | Value |
+|--------|-------|
+| `X-Api-Key` | `my-secret-key-123` |
+
+### Call GET /health (Public)
+
+**GET** `<api_endpoint from terraform output>health`
+
+No headers needed.
 
 ---
 
