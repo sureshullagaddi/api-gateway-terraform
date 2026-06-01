@@ -85,14 +85,15 @@ resource "aws_lambda_function" "authorizer" {
   function_name    = "${local.function_name}-authorizer"
   role             = aws_iam_role.authorizer.arn
   runtime          = "nodejs18.x"
-  handler          = "authorizer.handler"           # ← authorizer.js exports.handler
+  handler          = "authorizer.handler"
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
 
   environment {
     variables = {
-      ENVIRONMENT   = var.environment
-      VALID_API_KEY = var.authorizer_api_key  # ← secret key clients must send
+      ENVIRONMENT        = var.environment
+      VALID_API_KEY      = var.authorizer_api_key        # fallback for dev (no Secrets Manager)
+      API_KEY_SECRET_ARN = aws_secretsmanager_secret.partner_api_key.arn
     }
   }
 
@@ -100,8 +101,25 @@ resource "aws_lambda_function" "authorizer" {
 
   depends_on = [
     aws_iam_role_policy_attachment.authorizer_basic_execution,
+    aws_iam_role_policy.authorizer_secrets,
     aws_cloudwatch_log_group.authorizer,
   ]
+}
+
+# ── Secrets Manager — Partner API Key ─────────────────────────────────────────
+# Stores the API key that partner banks (Nordea, SEB etc.) use to call /admin.
+# The authorizer Lambda reads this at runtime (cached 5 min).
+# To rotate: update the secret value — Lambda picks it up within 5 minutes.
+resource "aws_secretsmanager_secret" "partner_api_key" {
+  name                    = "${var.project_name}-${var.environment}/partner-api-key"
+  description             = "API key for partner bank B2B access to ${var.project_name} ${var.environment} API"
+  recovery_window_in_days = 0 # allow immediate deletion (no 30-day window in dev)
+  tags                    = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "partner_api_key" {
+  secret_id     = aws_secretsmanager_secret.partner_api_key.id
+  secret_string = var.authorizer_api_key
 }
 
 # ── Package source → zip automatically on every plan/apply ───────────────────
