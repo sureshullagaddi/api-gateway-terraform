@@ -18,11 +18,6 @@ variable "lambda_function_name" {
   type        = string
 }
 
-variable "log_retention_days" {
-  description = "CloudWatch log retention in days for REST API access logs"
-  type        = number
-  default     = 14
-}
 
 variable "tags" {
   description = "Tags to apply to all REST API resources"

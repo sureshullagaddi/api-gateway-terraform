@@ -97,27 +97,11 @@ resource "aws_api_gateway_stage" "this" {
   rest_api_id   = aws_api_gateway_rest_api.this.id
   stage_name    = var.environment
 
-  # Enable CloudWatch access logging
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.rest_api_access.arn
-    format = jsonencode({
-      requestId  = "$context.requestId"
-      ip         = "$context.identity.sourceIp"
-      routeKey   = "$context.path"
-      status     = "$context.status"
-      apiKeyId   = "$context.identity.apiKeyId"
-      user       = "$context.identity.user"
-      error      = "$context.error.message"
-    })
-  }
+  # NOTE: REST API v1 access logging requires an account-level CloudWatch IAM
+  # role set via aws_api_gateway_account — skipped here to keep this module
+  # self-contained. The HTTP API (v2) already captures all access logs.
 
   tags = var.tags
-}
-
-resource "aws_cloudwatch_log_group" "rest_api_access" {
-  name              = "/aws/apigateway/${var.project_name}-${var.environment}-partner-rest-api"
-  retention_in_days = var.log_retention_days
-  tags              = var.tags
 }
 
 # ── Usage Plan: Premium — Nordea ──────────────────────────────────────────────

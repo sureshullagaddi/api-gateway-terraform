@@ -69,7 +69,6 @@ module "rest_api" {
   environment          = var.environment
   lambda_invoke_arn    = module.lambda.invoke_arn
   lambda_function_name = module.lambda.function_name
-  log_retention_days   = var.log_retention_days
   tags                 = local.tags
 }
 
