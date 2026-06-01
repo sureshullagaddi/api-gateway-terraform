@@ -1,15 +1,13 @@
 locals {
   api_name = "${var.project_name}-${var.environment}-api"
 
-  # Build a map of authorizer IDs so routes can reference them by key.
-  # "jwt"    → Cognito JWT authorizer (always created)
-  # "lambda" → Custom Lambda authorizer (created only when lambda_authorizer_uri != null)
-  authorizer_ids = merge(
-    { jwt = aws_apigatewayv2_authorizer.jwt.id },
-    var.lambda_authorizer_uri != null
-      ? { lambda = aws_apigatewayv2_authorizer.lambda_custom[0].id }
-      : {}
-  )
+  # Both authorizers are always created — routes reference them by key.
+  # "jwt"    → Cognito JWT authorizer
+  # "lambda" → Custom Lambda authorizer
+  authorizer_ids = {
+    jwt    = aws_apigatewayv2_authorizer.jwt.id
+    lambda = aws_apigatewayv2_authorizer.lambda_custom.id
+  }
 }
 
 # ── HTTP API ──────────────────────────────────────────────────────────────────
@@ -34,32 +32,21 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
   }
 }
 
-# ── Authorizer 2: Lambda Custom Authorizer (optional) ─────────────────────────
-# Created only when var.lambda_authorizer_uri is set.
-# Use this for: your own token format, external IdP, database lookup,
-# API-key-in-header validation, or any custom auth logic.
-#
-# The authorizer Lambda receives the request context + identity sources,
-# runs your code, and must return an IAM policy allowing or denying the call.
-# Set authorizer_payload_format_version = "2.0" for the simplified response format.
+# ── Authorizer 2: Lambda Custom Authorizer ────────────────────────────────────
+# Always created — routes opt in by setting authorization_type = "CUSTOM"
+# and authorizer_key = "lambda". Routes that don't use it are unaffected.
 resource "aws_apigatewayv2_authorizer" "lambda_custom" {
-  count = var.lambda_authorizer_uri != null ? 1 : 0
-
   api_id                            = aws_apigatewayv2_api.this.id
   name                              = "${local.api_name}-lambda-authorizer"
   authorizer_type                   = "REQUEST"
   authorizer_uri                    = var.lambda_authorizer_uri
   identity_sources                  = var.lambda_authorizer_identity_sources
   authorizer_payload_format_version = "2.0"
-
-  # Cache the authorizer result for this many seconds (0 = no cache).
-  # Set to 300 in prod to avoid calling the authorizer Lambda on every request.
   authorizer_result_ttl_in_seconds  = var.lambda_authorizer_cache_ttl
 }
 
 # Permission for API Gateway to invoke the custom authorizer Lambda
 resource "aws_lambda_permission" "authorizer_invoke" {
-  count = var.lambda_authorizer_uri != null ? 1 : 0
 
   statement_id  = "AllowAPIGatewayAuthorizerInvoke-${var.environment}"
   action        = "lambda:InvokeFunction"
