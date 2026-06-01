@@ -28,16 +28,12 @@ exports.handler = async (event) => {
     if (apiKey) {
       console.log('[AUTHORIZER] Checking X-Api-Key...');
       if (apiKey === validApiKey) {
-        console.log('[AUTHORIZER] ✅ API key VALID — access granted');
-        return {
-          isAuthorized: true,
-          context: {
-            keyId:      apiKey.substring(0, 8) + '...',
-            authMethod: 'api-key',
-          },
-        };
+        console.log('[AUTHORIZER] API key VALID — returning isAuthorized: true');
+        const result = { isAuthorized: true, context: { keyId: String(apiKey.substring(0, 8)) + '...', authMethod: 'api-key' } };
+        console.log('[AUTHORIZER] Return value:', JSON.stringify(result));
+        return result;
       } else {
-        console.log('[AUTHORIZER] ❌ API key INVALID — key does not match');
+        console.log('[AUTHORIZER] API key INVALID — key does not match');
         return { isAuthorized: false };
       }
     }
@@ -48,22 +44,18 @@ exports.handler = async (event) => {
       const validToken = process.env.VALID_TOKEN || 'my-custom-token';
       console.log('[AUTHORIZER] Checking custom Bearer token...');
       if (token === validToken) {
-        console.log('[AUTHORIZER] ✅ Custom token VALID — access granted');
-        return {
-          isAuthorized: true,
-          context: {
-            authMethod:  'custom-token',
-            tokenPrefix: token.substring(0, 8) + '...',
-          },
-        };
+        console.log('[AUTHORIZER] Custom token VALID — returning isAuthorized: true');
+        const result = { isAuthorized: true, context: { authMethod: 'custom-token', tokenPrefix: String(token.substring(0, 8)) + '...' } };
+        console.log('[AUTHORIZER] Return value:', JSON.stringify(result));
+        return result;
       } else {
-        console.log('[AUTHORIZER] ❌ Custom token INVALID — token does not match');
+        console.log('[AUTHORIZER] Custom token INVALID — token does not match');
         return { isAuthorized: false };
       }
     }
 
     // ── 5. No credentials found ────────────────────────────────────────────
-    console.log('[AUTHORIZER] ❌ No valid credentials in request — denying');
+    console.log('[AUTHORIZER] No valid credentials in request — denying');
     return { isAuthorized: false };
 
   } catch (err) {
