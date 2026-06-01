@@ -21,6 +21,46 @@
 #                                            → Lambda (same backend as HTTP API)
 #                                            → returns partner account summary
 # ============================================================================
+# modules/rest-api/main.tf
+#
+# REST API (v1) — Per-Partner Rate Limiting with Usage Plans + CloudWatch logging
+# ============================================================================
+
+# ── CloudWatch IAM role — required once per AWS account for REST API logging ──
+# REST API v1 requires an account-level IAM role before any stage can log.
+# HTTP API v2 does NOT need this — that's why logging worked there without setup.
+resource "aws_iam_role" "api_gateway_cloudwatch" {
+  name = "${var.project_name}-${var.environment}-rest-api-cw-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "apigateway.amazonaws.com" }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch" {
+  role       = aws_iam_role.api_gateway_cloudwatch.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+# Register the CloudWatch role at account level — one per AWS region.
+# Shared by ALL REST APIs in the account. Safe to apply multiple times.
+resource "aws_api_gateway_account" "this" {
+  cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
+  depends_on          = [aws_iam_role_policy_attachment.api_gateway_cloudwatch]
+}
+
+resource "aws_cloudwatch_log_group" "rest_api_access" {
+  name              = "/aws/apigateway/${var.project_name}-${var.environment}-partner-rest-api"
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
+}
 
 resource "aws_api_gateway_rest_api" "this" {
   name        = "${var.project_name}-${var.environment}-partner-rest-api"
@@ -97,9 +137,22 @@ resource "aws_api_gateway_stage" "this" {
   rest_api_id   = aws_api_gateway_rest_api.this.id
   stage_name    = var.environment
 
-  # NOTE: REST API v1 access logging requires an account-level CloudWatch IAM
-  # role set via aws_api_gateway_account — skipped here to keep this module
-  # self-contained. The HTTP API (v2) already captures all access logs.
+  # CloudWatch access logging — requires aws_api_gateway_account to be set first
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.rest_api_access.arn
+    format = jsonencode({
+      requestId  = "$context.requestId"
+      ip         = "$context.identity.sourceIp"
+      path       = "$context.path"
+      httpMethod = "$context.httpMethod"
+      status     = "$context.status"
+      apiKeyId   = "$context.identity.apiKeyId"
+      responseLength = "$context.responseLength"
+      error      = "$context.error.message"
+    })
+  }
+
+  depends_on = [aws_api_gateway_account.this]
 
   tags = var.tags
 }
