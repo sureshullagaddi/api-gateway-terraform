@@ -1,64 +1,82 @@
 'use strict';
 
+const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+
+const secretsClient = new SecretsManagerClient({ region: process.env.AWS_REGION });
+
+// ── Cache the secret outside the handler ──────────────────────────────────────
+// Lambda execution context is reused across invocations.
+// Caching avoids a Secrets Manager API call on every request.
+let cachedApiKey = null;
+let cacheExpiry  = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // refresh every 5 minutes
+
+async function getValidApiKey() {
+  const now = Date.now();
+  if (cachedApiKey && now < cacheExpiry) {
+    console.log('[AUTHORIZER] Using cached API key (expires in', Math.round((cacheExpiry - now) / 1000), 's)');
+    return cachedApiKey;
+  }
+
+  // Fallback to env var (dev/local) if no Secrets Manager ARN configured
+  const secretArn = process.env.API_KEY_SECRET_ARN;
+  if (!secretArn) {
+    console.log('[AUTHORIZER] No SECRET_ARN set — using VALID_API_KEY env var (dev mode)');
+    return process.env.VALID_API_KEY || 'my-secret-key-123';
+  }
+
+  console.log('[AUTHORIZER] Fetching API key from Secrets Manager:', secretArn);
+  const response = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretArn }));
+  cachedApiKey = response.SecretString;
+  cacheExpiry  = now + CACHE_TTL_MS;
+  console.log('[AUTHORIZER] API key refreshed from Secrets Manager — cached for 5 min');
+  return cachedApiKey;
+}
+
 /**
- * Custom Lambda Authorizer for API Gateway HTTP API (payload format 2.0)
- * Returns { isAuthorized: true/false, context: {...} }
+ * Custom Lambda Authorizer — validates X-Api-Key header.
+ *
+ * Real-world use: Partner bank (Nordea, SEB) calls IKANO's API
+ * with a pre-shared API key stored in AWS Secrets Manager.
+ *
+ * Key lifecycle:
+ *   1. IKANO security team generates key: openssl rand -hex 32
+ *   2. Stored in: AWS Secrets Manager (api-demo-{env}/partner-api-key)
+ *   3. Shared with partner via secure channel (encrypted email / vault)
+ *   4. Partner stores in THEIR Secrets Manager
+ *   5. Partner's backend reads key at runtime → sends as X-Api-Key header
+ *   6. This authorizer fetches key from Secrets Manager, compares → allow/deny
  */
 exports.handler = async (event) => {
-
-  // ── 1. Log full authorizer event ──────────────────────────────────────────
   console.log('[AUTHORIZER] ====== Authorizer Invoked ======');
-  console.log('[AUTHORIZER] Route       :', event.routeKey);
-  console.log('[AUTHORIZER] Raw path    :', event.rawPath);
-  console.log('[AUTHORIZER] Source IP   :', event.requestContext?.http?.sourceIp);
-  console.log('[AUTHORIZER] Full event  :', JSON.stringify(event, null, 2));
+  console.log('[AUTHORIZER] Route    :', event.routeKey);
+  console.log('[AUTHORIZER] Source IP:', event.requestContext?.http?.sourceIp);
 
   try {
-    // ── 2. Extract credentials ─────────────────────────────────────────────
-    // API Gateway lowercases all header names in payload format 2.0
-    const apiKey    = event.headers?.['x-api-key'];
-    const authHeader = event.headers?.['authorization'];
+    const incomingKey = event.headers?.['x-api-key'];
 
-    console.log('[AUTHORIZER] X-Api-Key header present :', !!apiKey);
-    console.log('[AUTHORIZER] Authorization header present :', !!authHeader);
+    console.log('[AUTHORIZER] X-Api-Key header present:', !!incomingKey);
 
-    const validApiKey = process.env.VALID_API_KEY || 'my-secret-key-123';
-
-    // ── 3. Validate API key in X-Api-Key header ────────────────────────────
-    if (apiKey) {
-      console.log('[AUTHORIZER] Checking X-Api-Key...');
-      if (apiKey === validApiKey) {
-        console.log('[AUTHORIZER] API key VALID — returning isAuthorized: true (no context)');
-        return { isAuthorized: true };
-      } else {
-        console.log('[AUTHORIZER] API key INVALID');
-        return { isAuthorized: false };
-      }
+    if (!incomingKey) {
+      console.log('[AUTHORIZER] ❌ No X-Api-Key header — denying');
+      return { isAuthorized: false };
     }
 
-    // ── 4. Validate custom Bearer token ───────────────────────────────────
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      const validToken = process.env.VALID_TOKEN || 'my-custom-token';
-      console.log('[AUTHORIZER] Checking custom Bearer token...');
-      if (token === validToken) {
-        console.log('[AUTHORIZER] Custom token VALID — returning isAuthorized: true (no context)');
-        return { isAuthorized: true };
-      } else {
-        console.log('[AUTHORIZER] Custom token INVALID');
-        return { isAuthorized: false };
-      }
+    // Fetch the valid key (from Secrets Manager or env var)
+    const validKey = await getValidApiKey();
+
+    if (incomingKey === validKey) {
+      console.log('[AUTHORIZER] ✅ API key VALID — access granted');
+      return { isAuthorized: true };
     }
 
-    // ── 5. No credentials found ────────────────────────────────────────────
-    console.log('[AUTHORIZER] No valid credentials in request — denying');
+    console.log('[AUTHORIZER] ❌ API key INVALID — does not match stored key');
     return { isAuthorized: false };
 
   } catch (err) {
     console.error('[AUTHORIZER] ====== ERROR ======');
-    console.error('[AUTHORIZER] Message :', err.message);
-    console.error('[AUTHORIZER] Stack   :', err.stack);
-    // Always deny on error — never fail open
-    return { isAuthorized: false };
+    console.error('[AUTHORIZER] Message:', err.message);
+    console.error('[AUTHORIZER] Stack  :', err.stack);
+    return { isAuthorized: false }; // always deny on error — never fail open
   }
 };

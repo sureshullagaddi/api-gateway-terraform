@@ -66,6 +66,21 @@ resource "aws_iam_role_policy_attachment" "authorizer_basic_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# Allow authorizer Lambda to read the partner API key from Secrets Manager
+resource "aws_iam_role_policy" "authorizer_secrets" {
+  name = "${local.function_name}-authorizer-secrets-policy"
+  role = aws_iam_role.authorizer.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = "arn:aws:secretsmanager:*:*:secret:${var.project_name}-${var.environment}/partner-api-key*"
+    }]
+  })
+}
+
 resource "aws_lambda_function" "authorizer" {
   function_name    = "${local.function_name}-authorizer"
   role             = aws_iam_role.authorizer.arn
