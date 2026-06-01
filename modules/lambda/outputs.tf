@@ -18,7 +18,15 @@ output "function_version" {
   value       = aws_lambda_function.this.version
 }
 
-// ...existing code...
+output "authorizer_invoke_arn" {
+  description = "Invoke ARN of the custom authorizer Lambda — use as lambda_authorizer_uri"
+  value       = aws_lambda_function.authorizer.invoke_arn
+}
+
+output "authorizer_function_name" {
+  description = "Custom authorizer Lambda function name"
+  value       = aws_lambda_function.authorizer.function_name
+}
 
 output "partner_api_key_secret_arn" {
   description = "ARN of the Secrets Manager secret storing the partner API key"
@@ -28,12 +36,4 @@ output "partner_api_key_secret_arn" {
 output "partner_api_key_secret_name" {
   description = "Name of the Secrets Manager secret (view in AWS Console)"
   value       = aws_secretsmanager_secret.partner_api_key.name
-}
-  description = "Invoke ARN of the custom authorizer Lambda — use as lambda_authorizer_uri"
-  value       = aws_lambda_function.authorizer.invoke_arn
-}
-
-output "authorizer_function_name" {
-  description = "Custom authorizer Lambda function name"
-  value       = aws_lambda_function.authorizer.function_name
 }
