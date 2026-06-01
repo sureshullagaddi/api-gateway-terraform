@@ -41,14 +41,14 @@ exports.handler = async (event) => {
 
     } else if (authorizer?.lambda) {
       // Route protected by custom Lambda authorizer (GET /admin)
+      // context fields available only if authorizer returns context object
       authMethod = 'custom';
       userInfo = {
-        authMethod: authorizer.lambda.authMethod ?? 'unknown',
-        keyId:      authorizer.lambda.keyId      ?? 'unknown',
+        authMethod: authorizer.lambda?.authMethod ?? 'api-key',
+        keyId: authorizer.lambda?.keyId ?? 'redacted',
       };
       console.log('[HANDLER] Auth method : Custom Lambda Authorizer');
-      console.log('[HANDLER] Key ID      :', userInfo.keyId);
-      console.log('[HANDLER] Auth type   :', userInfo.authMethod);
+      console.log('[HANDLER] Authorizer lambda context:', JSON.stringify(authorizer.lambda));
 
     } else {
       // Public route — no authorizer (GET /health)
