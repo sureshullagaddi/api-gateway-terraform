@@ -2,68 +2,75 @@
 
 /**
  * Custom Lambda Authorizer for API Gateway HTTP API (payload format 2.0)
- *
- * This authorizer is called BEFORE your main Lambda handler.
- * It receives the request and must return { isAuthorized: true/false }
- *
- * Use cases:
- *   - Validate a custom API key in a header
- *   - Check a token against your own database
- *   - Integrate with an external IdP (Okta, Auth0, etc.)
- *   - Any custom auth logic Cognito JWT can't cover
- *
- * Payload format 2.0 (HTTP API) — simplified response:
- *   { isAuthorized: true }   → allow, invoke main Lambda
- *   { isAuthorized: false }  → deny, return 403 Forbidden
+ * Returns { isAuthorized: true/false, context: {...} }
  */
 exports.handler = async (event) => {
-  console.log('Authorizer event:', JSON.stringify(event, null, 2));
+
+  // ── 1. Log full authorizer event ──────────────────────────────────────────
+  console.log('[AUTHORIZER] ====== Authorizer Invoked ======');
+  console.log('[AUTHORIZER] Route       :', event.routeKey);
+  console.log('[AUTHORIZER] Raw path    :', event.rawPath);
+  console.log('[AUTHORIZER] Source IP   :', event.requestContext?.http?.sourceIp);
+  console.log('[AUTHORIZER] Full event  :', JSON.stringify(event, null, 2));
 
   try {
-    // ── Example 1: API Key in header ────────────────────────────────────────
-    // Client sends:  X-Api-Key: my-secret-key-123
-    const apiKey = event.headers?.['x-api-key'];
+    // ── 2. Extract credentials ─────────────────────────────────────────────
+    // API Gateway lowercases all header names in payload format 2.0
+    const apiKey    = event.headers?.['x-api-key'];
+    const authHeader = event.headers?.['authorization'];
+
+    console.log('[AUTHORIZER] X-Api-Key header present :', !!apiKey);
+    console.log('[AUTHORIZER] Authorization header present :', !!authHeader);
+
     const validApiKey = process.env.VALID_API_KEY || 'my-secret-key-123';
 
-    if (apiKey === validApiKey) {
-      console.log('✅ API key valid — access granted');
-      return {
-        isAuthorized: true,
-        context: {
-          // These are passed to the main Lambda via:
-          // event.requestContext.authorizer.lambda.keyId
-          keyId: apiKey.substring(0, 8) + '...',
-          authMethod: 'api-key',
-        },
-      };
-    }
-
-    // ── Example 2: Custom Bearer token ──────────────────────────────────────
-    // Client sends:  Authorization: Bearer my-custom-token
-    const authHeader = event.headers?.authorization || event.headers?.Authorization;
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      const validToken = process.env.VALID_TOKEN || 'my-custom-token';
-
-      if (token === validToken) {
-        console.log('✅ Custom token valid — access granted');
+    // ── 3. Validate API key in X-Api-Key header ────────────────────────────
+    if (apiKey) {
+      console.log('[AUTHORIZER] Checking X-Api-Key...');
+      if (apiKey === validApiKey) {
+        console.log('[AUTHORIZER] ✅ API key VALID — access granted');
         return {
           isAuthorized: true,
           context: {
-            authMethod: 'custom-token',
-            tokenPrefix: token.substring(0, 8) + '...',
+            keyId:      apiKey.substring(0, 8) + '...',
+            authMethod: 'api-key',
           },
         };
+      } else {
+        console.log('[AUTHORIZER] ❌ API key INVALID — key does not match');
+        return { isAuthorized: false };
       }
     }
 
-    // ── Deny by default ─────────────────────────────────────────────────────
-    console.log('❌ No valid credentials found — access denied');
+    // ── 4. Validate custom Bearer token in Authorization header ───────────
+    if (authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      const validToken = process.env.VALID_TOKEN || 'my-custom-token';
+      console.log('[AUTHORIZER] Checking custom Bearer token...');
+      if (token === validToken) {
+        console.log('[AUTHORIZER] ✅ Custom token VALID — access granted');
+        return {
+          isAuthorized: true,
+          context: {
+            authMethod:  'custom-token',
+            tokenPrefix: token.substring(0, 8) + '...',
+          },
+        };
+      } else {
+        console.log('[AUTHORIZER] ❌ Custom token INVALID — token does not match');
+        return { isAuthorized: false };
+      }
+    }
+
+    // ── 5. No credentials found ────────────────────────────────────────────
+    console.log('[AUTHORIZER] ❌ No valid credentials in request — denying');
     return { isAuthorized: false };
 
   } catch (err) {
-    console.error('Authorizer error:', err);
+    console.error('[AUTHORIZER] ====== ERROR ======');
+    console.error('[AUTHORIZER] Message :', err.message);
+    console.error('[AUTHORIZER] Stack   :', err.stack);
+    // Always deny on error — never fail open
     return { isAuthorized: false };
   }
 };
-
