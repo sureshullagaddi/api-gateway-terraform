@@ -69,3 +69,27 @@ output "internal_caller_invoke_command" {
   description = "AWS CLI command to trigger the internal caller Lambda and test the full AWS_IAM SigV4 flow"
   value       = "aws lambda invoke --function-name ${module.lambda.internal_caller_function_name} --region ${var.aws_region} --payload '{}' /tmp/response.json && cat /tmp/response.json"
 }
+
+# ── REST API (v1) outputs ──────────────────────────────────────────────────────
+output "rest_api_endpoint" {
+  description = "REST API (v1) base URL — partner rate-limiting demo"
+  value       = module.rest_api.api_endpoint
+}
+
+output "rest_api_partner_accounts_url" {
+  description = "Full URL for GET /partner/accounts — requires x-api-key header"
+  value       = module.rest_api.partner_accounts_url
+}
+
+output "rest_api_nordea_key" {
+  description = "Nordea partner API key (premium plan — 10K req/day). Send as x-api-key header."
+  value       = module.rest_api.nordea_api_key
+  sensitive   = true
+}
+
+output "rest_api_seb_key" {
+  description = "SEB partner API key (standard plan — 5K req/day). Send as x-api-key header."
+  value       = module.rest_api.seb_api_key
+  sensitive   = true
+}
+

@@ -59,6 +59,20 @@ module "api_gateway" {
   tags                   = local.tags
 }
 
+# ── REST API (v1) — Per-Partner Rate Limiting via Usage Plans ─────────────────
+# Separate from the HTTP API above. Same Lambda backend, different front-door.
+# Demonstrates the one REST API feature HTTP API cannot replicate natively:
+#   per-client quotas (Nordea=10K/day, SEB=5K/day) enforced by AWS automatically.
+module "rest_api" {
+  source               = "../rest-api"
+  project_name         = var.project_name
+  environment          = var.environment
+  lambda_invoke_arn    = module.lambda.invoke_arn
+  lambda_function_name = module.lambda.function_name
+  log_retention_days   = var.log_retention_days
+  tags                 = local.tags
+}
+
 module "monitoring" {
   source               = "../monitoring"
   project_name         = var.project_name

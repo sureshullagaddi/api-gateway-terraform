@@ -56,3 +56,27 @@ output "internal_caller_invoke_command" {
   description = "Ready-to-run CLI command to test the full AWS_IAM SigV4 flow"
   value       = module.stack.internal_caller_invoke_command
 }
+
+# ── REST API (v1) — per-partner rate limiting ──────────────────────────────────
+output "rest_api_endpoint" {
+  description = "REST API (v1) base URL"
+  value       = module.stack.rest_api_endpoint
+}
+
+output "rest_api_partner_accounts_url" {
+  description = "GET /partner/accounts — send x-api-key header"
+  value       = module.stack.rest_api_partner_accounts_url
+}
+
+output "rest_api_nordea_key" {
+  description = "Nordea partner API key (premium — 10K req/day)"
+  value       = module.stack.rest_api_nordea_key
+  sensitive   = true
+}
+
+output "rest_api_seb_key" {
+  description = "SEB partner API key (standard — 5K req/day)"
+  value       = module.stack.rest_api_seb_key
+  sensitive   = true
+}
+
