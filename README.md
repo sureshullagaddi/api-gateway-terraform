@@ -2,10 +2,6 @@
 
 A production-grade, multi-environment AWS API Gateway deployment using Terraform modular design, GitHub Actions CI/CD with OIDC authentication, Cognito JWT authorization, CloudWatch monitoring, WAF protection, and Lambda blue/green deployments.
 
-> **Status:** Successfully deployed to `dev` ✅  
-> **API endpoint:** `https://ztdsvilz58.execute-api.eu-north-1.amazonaws.com/`  
-> **Region:** `eu-north-1`
-
 ---
 
 ## Architecture
