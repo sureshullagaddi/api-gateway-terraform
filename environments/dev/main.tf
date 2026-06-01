@@ -21,6 +21,9 @@ module "stack" {
   enable_waf             = var.enable_waf
   authorizer_api_key     = var.authorizer_api_key
 
+  # Custom authorizer reads X-Api-Key header (not Authorization)
+  lambda_authorizer_identity_sources = ["$request.header.X-Api-Key"]
+
   # Routes: JWT-secured, custom-auth, and public
   routes = {
     "GET /secure" = { authorization_type = "JWT",    authorizer_key = "jwt"    }
