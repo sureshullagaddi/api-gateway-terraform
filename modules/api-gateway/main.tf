@@ -43,6 +43,11 @@ resource "aws_apigatewayv2_authorizer" "lambda_custom" {
   identity_sources                  = var.lambda_authorizer_identity_sources
   authorizer_payload_format_version = "2.0"
   authorizer_result_ttl_in_seconds  = var.lambda_authorizer_cache_ttl
+
+  # REQUIRED for { isAuthorized: true/false } simple response format.
+  # Without this, API Gateway expects a full IAM policy document response
+  # and will return 500 when it receives the simple format.
+  enable_simple_responses = true
 }
 
 # Permission for API Gateway to invoke the custom authorizer Lambda
