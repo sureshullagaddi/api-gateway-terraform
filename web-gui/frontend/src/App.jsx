@@ -63,6 +63,17 @@ export default function App() {
     }
   };
 
+  const handleForceClear = async (apiName) => {
+    if (!confirm(`Force clear '${apiName}' from registry?\n\nThis removes the record only. AWS resources may still exist — check AWS Console.`)) return;
+    try {
+      await api.forceClear(apiName);
+      showToast(`🧹 '${apiName}' cleared from registry`);
+      loadApis();
+    } catch (e) {
+      showToast(`Force clear failed: ${e.message}`, 'error');
+    }
+  };
+
   return (
     <div className="bg-gray-50 min-h-screen">
       <Header onRefresh={loadApis} />
@@ -75,6 +86,7 @@ export default function App() {
           onRefresh={loadApis}
           onViewDetails={handleViewDetails}
           onDelete={handleDelete}
+          onForceClear={handleForceClear}
         />
       </main>
 

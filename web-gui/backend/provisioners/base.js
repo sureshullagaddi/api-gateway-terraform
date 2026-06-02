@@ -74,14 +74,23 @@ async function createHttpApiBase(apiName, environment, description) {
   }
 
   // 5. Allow API Gateway to invoke the existing Lambda
-  await lambda.send(new AddPermissionCommand({
-    FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
-    StatementId:  `AllowAPIGW-${apiName}-${environment}`,
-    Action:       'lambda:InvokeFunction',
-    Principal:    'apigateway.amazonaws.com',
-    SourceArn:    `arn:aws:execute-api:${REGION}:*:${api.ApiId}/*/*`,
-    Qualifier:    'live',
-  }));
+  // Idempotent — ignore ResourceConflictException if permission already exists
+  try {
+    await lambda.send(new AddPermissionCommand({
+      FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
+      StatementId:  `AllowAPIGW-${apiName}-${environment}`,
+      Action:       'lambda:InvokeFunction',
+      Principal:    'apigateway.amazonaws.com',
+      SourceArn:    `arn:aws:execute-api:${REGION}:*:${api.ApiId}/*/*`,
+      Qualifier:    'live',
+    }));
+  } catch (e) {
+    if (e.name === 'ResourceConflictException') {
+      console.log(`[base] Lambda permission already exists for ${apiName}-${environment} — skipping`);
+    } else {
+      throw e;
+    }
+  }
 
   return {
     apiId:           api.ApiId,
@@ -107,7 +116,15 @@ async function deleteHttpApiBase(apiId, apiName, environment) {
   }
 
   // Delete the API (cascades — deletes routes, integrations, authorizers)
-  await apigw.send(new DeleteApiCommand({ ApiId: apiId }));
+  try {
+    await apigw.send(new DeleteApiCommand({ ApiId: apiId }));
+  } catch (e) {
+    // NotFoundException means already deleted — safe to continue
+    if (e.name !== 'NotFoundException') {
+      throw e;
+    }
+    console.warn(`[base] API ${apiId} not found — already deleted`);
+  }
 
   // Delete log group
   try {

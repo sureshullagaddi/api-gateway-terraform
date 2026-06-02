@@ -215,6 +215,12 @@ resource "aws_apigatewayv2_route" "destroy" {
   target    = "integrations/${aws_apigatewayv2_integration.gui.id}"
 }
 
+resource "aws_apigatewayv2_route" "force_clear" {
+  api_id    = aws_apigatewayv2_api.gui.id
+  route_key = "POST /apis/{api_name}/force-clear"
+  target    = "integrations/${aws_apigatewayv2_integration.gui.id}"
+}
+
 resource "aws_apigatewayv2_stage" "gui" {
   api_id      = aws_apigatewayv2_api.gui.id
   name        = "$default"

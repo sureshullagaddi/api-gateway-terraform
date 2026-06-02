@@ -21,12 +21,14 @@ async function request(path, options = {}) {
 
 export const api = {
   /** Create a new API */
-  createApi: (body)     => request('/apis', { method: 'POST', body: JSON.stringify(body) }),
+  createApi:  (body)    => request('/apis', { method: 'POST', body: JSON.stringify(body) }),
   /** List all provisioned APIs */
-  listApis:  ()         => request('/apis'),
+  listApis:   ()        => request('/apis'),
   /** Get one API by name */
-  getApi:    (apiName)  => request(`/apis/${apiName}`),
+  getApi:     (apiName) => request(`/apis/${apiName}`),
   /** Delete an API and all its AWS resources */
-  deleteApi: (apiName)  => request(`/apis/${apiName}`, { method: 'DELETE' }),
+  deleteApi:  (apiName) => request(`/apis/${apiName}`, { method: 'DELETE' }),
+  /** Force-clear a stuck DELETE_FAILED or FAILED record from registry */
+  forceClear: (apiName) => request(`/apis/${apiName}/force-clear`, { method: 'POST' }),
 };
 

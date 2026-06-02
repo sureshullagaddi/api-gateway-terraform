@@ -141,6 +141,17 @@ exports.handler = async (event) => {
       return ok(item);
     }
 
+    // ── POST /apis/{api_name}/force-clear — remove stuck DELETE_FAILED record ──
+    if (method === 'POST' && path.endsWith('/force-clear') && apiName) {
+      const item = await db.getApi(apiName);
+      if (!item) return err(`API '${apiName}' not found`, 404);
+      if (item.status !== 'DELETE_FAILED' && item.status !== 'FAILED') {
+        return err(`Force clear only allowed for DELETE_FAILED or FAILED status (current: ${item.status})`, 400);
+      }
+      await db.deleteApi(apiName);
+      return ok({ message: `API '${apiName}' force-cleared from registry. Note: some AWS resources may still exist — check AWS Console.` });
+    }
+
     // ── DELETE /apis/{api_name} — destroy an API ──────────────────────────────
     if (method === 'DELETE' && apiName) {
       const item = await db.getApi(apiName);

@@ -1,6 +1,6 @@
 import ApiCard from './ApiCard';
 
-export default function ApiList({ apis, loading, onViewDetails, onDelete }) {
+export default function ApiList({ apis, loading, onViewDetails, onDelete, onForceClear }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
       {/* Card header */}
@@ -28,6 +28,7 @@ export default function ApiList({ apis, loading, onViewDetails, onDelete }) {
                 api={api}
                 onViewDetails={() => onViewDetails(api.api_name)}
                 onDelete={() => onDelete(api.api_name)}
+                onForceClear={() => onForceClear(api.api_name)}
               />
             ))
         )}
