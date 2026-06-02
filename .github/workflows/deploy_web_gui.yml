@@ -119,9 +119,20 @@ jobs:
             -backend-config="region=${{ vars.AWS_REGION || 'eu-north-1' }}" \
             -backend-config="dynamodb_table=terraform-lock" \
             -backend-config="encrypt=true"
-          echo "lambda_function_name=$(terraform output -raw lambda_function_name)"       >> $GITHUB_OUTPUT
-          echo "cognito_user_pool_id=$(terraform output -raw cognito_user_pool_id)"       >> $GITHUB_OUTPUT
-          echo "cognito_client_id=$(terraform output -raw cognito_client_id)"             >> $GITHUB_OUTPUT
+
+          # Verify main stack has outputs before continuing
+          LAMBDA_NAME=$(terraform output -raw lambda_function_name 2>/dev/null || echo "")
+          if [ -z "$LAMBDA_NAME" ]; then
+            echo "❌ ERROR: Main stack outputs not found in environment '${{ github.event.inputs.environment }}'"
+            echo "   The main stack must be deployed first."
+            echo "   Run: deploy_terraform.yml → environment: ${{ github.event.inputs.environment }}"
+            exit 1
+          fi
+
+          echo "lambda_function_name=${LAMBDA_NAME}" >> $GITHUB_OUTPUT
+          echo "cognito_user_pool_id=$(terraform output -raw cognito_user_pool_id)" >> $GITHUB_OUTPUT
+          echo "cognito_client_id=$(terraform output -raw cognito_client_id)"       >> $GITHUB_OUTPUT
+          echo "✅ Main stack outputs found — Lambda: ${LAMBDA_NAME}"
 
       # ── Step 4: Deploy Terraform infrastructure ───────────────────────────────
       - name: Terraform Init (web-gui)
