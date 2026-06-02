@@ -27,6 +27,22 @@ output "lambda_function_name" {
   value       = module.stack.lambda_function_name
 }
 
+# ── Lambda ARNs — pass these to web-gui/infrastructure/terraform.tfvars ────────
+output "lambda_invoke_arn" {
+  description = "Lambda live alias INVOKE ARN — use this as existing_lambda_arn in web-gui tfvars"
+  value       = module.stack.lambda_invoke_arn
+}
+
+output "authorizer_function_name" {
+  description = "Custom authorizer Lambda function name — use as existing_authorizer_function_name"
+  value       = module.stack.authorizer_function_name
+}
+
+output "authorizer_invoke_arn" {
+  description = "Custom authorizer Lambda INVOKE ARN — use as existing_authorizer_lambda_arn in web-gui tfvars"
+  value       = module.stack.authorizer_invoke_arn
+}
+
 output "lambda_version" {
   description = "Published Lambda version"
   value       = module.stack.lambda_version

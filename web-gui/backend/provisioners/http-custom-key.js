@@ -6,8 +6,7 @@
  * Reuses the EXISTING authorizer Lambda — no new Lambda created.
  */
 
-const {
-  createHttpApiBase, deleteHttpApiBase,
+const { createHttpApiBase, deleteHttpApiBase,
   apigw, lambda, getAccountId,
   CreateRouteCommand, CreateAuthorizerCommand,
   AddPermissionCommand, RemovePermissionCommand,
@@ -15,6 +14,14 @@ const {
 
 // AWS_ACCOUNT_REGION is the custom env var; AWS_REGION is set automatically by Lambda runtime
 const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
+
+// Build the invoke ARN format required by API GW v2 for authorizer URIs
+// arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/{lambda-arn}/invocations
+function buildAuthorizerUri(lambdaArn) {
+  if (!lambdaArn) return lambdaArn;
+  if (lambdaArn.startsWith('arn:aws:apigateway:')) return lambdaArn;
+  return `arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations`;
+}
 
 async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
   console.log(`[http-custom-key] create start — apiName=${apiName} env=${environment} region=${REGION}`);
@@ -42,12 +49,13 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
   console.log(`[http-custom-key] Lambda permission added`);
 
   // Create Lambda REQUEST authorizer — simple response format
-  console.log(`[http-custom-key] creating REQUEST authorizer — uri=${process.env.EXISTING_AUTHORIZER_LAMBDA_ARN}`);
+  const authorizerUri = buildAuthorizerUri(process.env.EXISTING_AUTHORIZER_LAMBDA_ARN);
+  console.log(`[http-custom-key] creating REQUEST authorizer — uri=${authorizerUri}`);
   const authorizer = await apigw.send(new CreateAuthorizerCommand({
     ApiId:                           base.apiId,
     Name:                            `${apiName}-${environment}-lambda-authorizer`,
     AuthorizerType:                  'REQUEST',
-    AuthorizerUri:                   process.env.EXISTING_AUTHORIZER_LAMBDA_ARN,
+    AuthorizerUri:                   authorizerUri,
     AuthorizerPayloadFormatVersion:  '2.0',
     EnableSimpleResponses:           true,  // ← expects { isAuthorized: true/false }
     AuthorizerResultTtlInSeconds:    300,   // cache 5 min

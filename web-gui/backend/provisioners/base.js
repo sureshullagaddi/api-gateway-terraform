@@ -27,6 +27,18 @@ const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts');
 
 const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
 
+// ── Build the correct Lambda integration URI for HTTP API v2 ─────────────────
+// API GW v2 CreateIntegration requires the API GW invoke ARN format:
+//   arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/{lambda-arn}/invocations
+// Accepts either format in the env var and normalises automatically.
+function buildIntegrationUri(lambdaArn) {
+  if (!lambdaArn) return lambdaArn;
+  // Already in invoke ARN format — pass through
+  if (lambdaArn.startsWith('arn:aws:apigateway:')) return lambdaArn;
+  // Plain Lambda ARN — convert to invoke ARN format
+  return `arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations`;
+}
+
 const apigw  = new ApiGatewayV2Client({ region: REGION });
 const lambda = new LambdaClient({ region: REGION });
 const logs   = new CloudWatchLogsClient({ region: REGION });
@@ -63,11 +75,12 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
   if (onApiCreated) await onApiCreated(api.ApiId);
 
   // 2. Create Lambda integration — points to EXISTING backend Lambda
-  console.log(`[base] step 2 — CreateIntegration | uri=${process.env.EXISTING_LAMBDA_ARN}`);
+  const integrationUri = buildIntegrationUri(process.env.EXISTING_LAMBDA_ARN);
+  console.log(`[base] step 2 — CreateIntegration | integrationUri=${integrationUri}`);
   const integration = await apigw.send(new CreateIntegrationCommand({
     ApiId:                api.ApiId,
     IntegrationType:      'AWS_PROXY',
-    IntegrationUri:       process.env.EXISTING_LAMBDA_ARN,
+    IntegrationUri:       integrationUri,
     PayloadFormatVersion: '2.0',
   }));
   console.log(`[base] step 2 done — integrationId=${integration.IntegrationId}`);

@@ -45,6 +45,21 @@ output "lambda_function_name" {
   value       = module.lambda.function_name
 }
 
+output "lambda_invoke_arn" {
+  description = "Lambda live alias invoke ARN — required by web-gui as existing_lambda_arn"
+  value       = module.lambda.invoke_arn
+}
+
+output "authorizer_function_name" {
+  description = "Custom authorizer Lambda function name"
+  value       = module.lambda.authorizer_function_name
+}
+
+output "authorizer_invoke_arn" {
+  description = "Custom authorizer Lambda invoke ARN — required by web-gui as existing_authorizer_lambda_arn"
+  value       = module.lambda.authorizer_invoke_arn
+}
+
 output "lambda_version" {
   description = "Current published Lambda version (for blue/green rollback reference)"
   value       = module.lambda.function_version
