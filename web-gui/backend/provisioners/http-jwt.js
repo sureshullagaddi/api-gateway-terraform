@@ -10,10 +10,11 @@ const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand, CreateA
 
 const REGION = process.env.AWS_ACCOUNT_REGION;
 
-async function create({ apiName, environment, routePath, httpMethod }) {
+async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
   const base = await createHttpApiBase(
     apiName, environment,
-    `JWT-protected HTTP API — Cognito auth, ${httpMethod} ${routePath}`
+    `JWT-protected HTTP API — Cognito auth, ${httpMethod} ${routePath}`,
+    { onApiCreated }
   );
 
   // Create JWT authorizer — reuses existing Cognito pool

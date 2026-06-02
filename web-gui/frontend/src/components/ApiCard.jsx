@@ -9,6 +9,7 @@ const STATUS_STYLES = {
 export default function ApiCard({ api, onViewDetails, onDelete, onForceClear }) {
   const statusStyle = STATUS_STYLES[api.status] ?? 'bg-gray-100 text-gray-600';
   const isStuck = api.status === 'DELETE_FAILED' || api.status === 'FAILED';
+  const canDelete = ['ACTIVE', 'FAILED', 'DELETE_FAILED'].includes(api.status);
 
   return (
     <div className="p-4 hover:bg-gray-50 transition-colors fade-in">
@@ -49,7 +50,7 @@ export default function ApiCard({ api, onViewDetails, onDelete, onForceClear }) 
             </button>
             <button
               onClick={onDelete}
-              disabled={api.status === 'DELETING'}
+              disabled={!canDelete || api.status === 'DELETING'}
               className="text-xs px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition-colors disabled:opacity-50"
             >
               Delete

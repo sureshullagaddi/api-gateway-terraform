@@ -99,6 +99,11 @@ exports.handler = async (event) => {
           partnerName:         body.partner_name ?? 'partner',
           quotaPerDay:         body.quota_per_day ?? 5000,
           rateLimitPerSecond:  body.rate_limit_per_second ?? 50,
+          // Saves api_id to DynamoDB as soon as API GW is created
+          // so delete can clean up even if later steps fail
+          onApiCreated: async (apiId) => {
+            await db.updateStatus(body.api_name, 'CREATING', { api_id: apiId });
+          },
         });
       } catch (provisionError) {
         // Mark as failed in DynamoDB
@@ -158,6 +163,12 @@ exports.handler = async (event) => {
       if (!item) return err(`API '${apiName}' not found`, 404);
       if (item.status === 'DELETING') return err(`API '${apiName}' is already being deleted`, 409);
 
+      // Allow deleting FAILED records too — they may have partial AWS resources
+      const deletableStatuses = ['ACTIVE', 'FAILED', 'DELETE_FAILED'];
+      if (!deletableStatuses.includes(item.status)) {
+        return err(`Cannot delete API with status '${item.status}'`, 400);
+      }
+
       await db.updateStatus(apiName, 'DELETING');
 
       const provisioner = provisioners[item.api_type];
@@ -185,4 +196,3 @@ exports.handler = async (event) => {
     return err('Internal server error', 500, e.message);
   }
 };
-

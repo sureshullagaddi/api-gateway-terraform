@@ -16,7 +16,7 @@ const {
 } = require('@aws-sdk/lib-dynamodb');
 
 const client = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: process.env.AWS_ACCOUNT_REGION })
+  new DynamoDBClient({ region: process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION })
 );
 const TABLE = process.env.DYNAMODB_TABLE;
 

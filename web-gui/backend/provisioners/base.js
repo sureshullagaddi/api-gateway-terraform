@@ -25,7 +25,7 @@ const {
 
 const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts');
 
-const REGION = process.env.AWS_ACCOUNT_REGION;
+const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
 
 const apigw  = new ApiGatewayV2Client({ region: REGION });
 const lambda = new LambdaClient({ region: REGION });
@@ -47,13 +47,16 @@ async function getAccountId() {
  * Used by all HTTP API provisioners.
  * Returns: { apiId, integrationId, apiEndpoint }
  */
-async function createHttpApiBase(apiName, environment, description) {
+async function createHttpApiBase(apiName, environment, description, { onApiCreated } = {}) {
   // 1. Create the HTTP API
   const api = await apigw.send(new CreateApiCommand({
     Name:         `${apiName}-${environment}-api`,
     ProtocolType: 'HTTP',
     Description:  description,
   }));
+
+  // ✅ Save api_id to DynamoDB immediately — so delete works even if later steps fail
+  if (onApiCreated) await onApiCreated(api.ApiId);
 
   // 2. Create Lambda integration — points to EXISTING backend Lambda
   const integration = await apigw.send(new CreateIntegrationCommand({

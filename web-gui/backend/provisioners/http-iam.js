@@ -8,10 +8,11 @@
 
 const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand } = require('./base');
 
-async function create({ apiName, environment, routePath, httpMethod }) {
+async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
   const base = await createHttpApiBase(
     apiName, environment,
-    `AWS_IAM SigV4 HTTP API — internal service-to-service, ${httpMethod} ${routePath}`
+    `AWS_IAM SigV4 HTTP API — internal service-to-service, ${httpMethod} ${routePath}`,
+    { onApiCreated }
   );
 
   // Create route with AWS_IAM auth — API GW verifies SigV4 signature against IAM

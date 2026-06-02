@@ -15,10 +15,11 @@ const {
 
 const REGION = process.env.AWS_ACCOUNT_REGION;
 
-async function create({ apiName, environment, routePath, httpMethod }) {
+async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
   const base = await createHttpApiBase(
     apiName, environment,
-    `Custom Lambda authorizer HTTP API — X-Api-Key, ${httpMethod} ${routePath}`
+    `Custom Lambda authorizer HTTP API — X-Api-Key, ${httpMethod} ${routePath}`,
+    { onApiCreated }
   );
 
   // Allow API Gateway to invoke the EXISTING authorizer Lambda

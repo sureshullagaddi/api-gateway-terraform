@@ -7,10 +7,11 @@
 
 const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand } = require('./base');
 
-async function create({ apiName, environment, routePath, httpMethod }) {
+async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
   const base = await createHttpApiBase(
     apiName, environment,
-    `Public HTTP API — no auth, ${httpMethod} ${routePath}`
+    `Public HTTP API — no auth, ${httpMethod} ${routePath}`,
+    { onApiCreated }
   );
 
   // Create route — authorization_type = NONE
