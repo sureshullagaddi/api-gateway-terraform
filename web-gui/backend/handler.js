@@ -73,22 +73,35 @@ function err(message, status = 400, details = null) {
 }
 
 // ── AWS error serialiser ──────────────────────────────────────────────────────
-// AWS SDK v3 errors often have message="UnknownError" but the real cause is in
-// e.name (e.g. "ValidationException"), e.Code, e.$metadata.httpStatusCode, etc.
+// AWS SDK v3 sets e.name="Unknown" e.message="Unknown" when it can't parse the
+// service error body. The real cause lives in other fields — we try them all.
 function serializeAwsError(e) {
-  const code    = e.name || e.Code || e.code || 'UnknownError';
-  const message = (e.message && e.message !== 'UnknownError')
-    ? e.message
-    : (e.Error?.Message || e.Message || code);
+  // name / code — prefer the specific exception type over generic "Unknown"
+  const code = (e.name && e.name !== 'Unknown' && e.name !== 'Error')
+    ? e.name
+    : (e.Code || e.code || e.name || 'UnknownError');
+
+  // message — skip generic sentinels and fall back through every known field
+  const GENERIC = new Set(['Unknown', 'UnknownError', 'undefined', '']);
+  const message =
+    (!GENERIC.has(e.message) ? e.message : null) ||
+    e.Error?.Message ||
+    e.Message ||
+    e.errorMessage ||
+    e.detail ||
+    code;
+
+  // Log the full raw error to CloudWatch so developers can always find the cause
+  console.error('[serializeAwsError] raw error:', JSON.stringify(e, Object.getOwnPropertyNames(e)));
+
   return {
     code,
     message,
     httpStatus: e.$metadata?.httpStatusCode ?? null,
     requestId:  e.$metadata?.requestId      ?? null,
-    // Include any extra AWS-specific fields that explain the problem
-    ...(e.detail         && { detail:         e.detail }),
-    ...(e.reason         && { reason:         e.reason }),
-    ...(e.OAuthError     && { OAuthError:     e.OAuthError }),
+    ...(e.detail     && { detail:     e.detail }),
+    ...(e.reason     && { reason:     e.reason }),
+    ...(e.OAuthError && { OAuthError: e.OAuthError }),
   };
 }
 

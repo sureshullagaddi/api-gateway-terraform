@@ -48,50 +48,61 @@ async function getAccountId() {
  * Returns: { apiId, integrationId, apiEndpoint }
  */
 async function createHttpApiBase(apiName, environment, description, { onApiCreated } = {}) {
+  console.log(`[base] createHttpApiBase — ${apiName}-${environment} | region=${REGION} | lambdaArn=${process.env.EXISTING_LAMBDA_ARN} | lambdaFn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME}`);
+
   // 1. Create the HTTP API
+  console.log(`[base] step 1 — CreateApi`);
   const api = await apigw.send(new CreateApiCommand({
     Name:         `${apiName}-${environment}-api`,
     ProtocolType: 'HTTP',
     Description:  description,
   }));
+  console.log(`[base] step 1 done — apiId=${api.ApiId} endpoint=${api.ApiEndpoint}`);
 
   // ✅ Save api_id to DynamoDB immediately — so delete works even if later steps fail
   if (onApiCreated) await onApiCreated(api.ApiId);
 
   // 2. Create Lambda integration — points to EXISTING backend Lambda
+  console.log(`[base] step 2 — CreateIntegration | uri=${process.env.EXISTING_LAMBDA_ARN}`);
   const integration = await apigw.send(new CreateIntegrationCommand({
     ApiId:                api.ApiId,
     IntegrationType:      'AWS_PROXY',
     IntegrationUri:       process.env.EXISTING_LAMBDA_ARN,
     PayloadFormatVersion: '2.0',
   }));
+  console.log(`[base] step 2 done — integrationId=${integration.IntegrationId}`);
 
   // 3. Create $default stage with auto-deploy
+  console.log(`[base] step 3 — CreateStage`);
   await apigw.send(new CreateStageCommand({
     ApiId:      api.ApiId,
     StageName:  '$default',
     AutoDeploy: true,
   }));
+  console.log(`[base] step 3 done`);
 
   // 4. Create CloudWatch log group
   const logGroupName = `/aws/apigateway/${apiName}-${environment}-api`;
+  console.log(`[base] step 4 — CreateLogGroup ${logGroupName}`);
   try {
     await logs.send(new CreateLogGroupCommand({ logGroupName }));
     await logs.send(new PutRetentionPolicyCommand({ logGroupName, retentionInDays: 14 }));
   } catch (e) {
     if (e.name !== 'ResourceAlreadyExistsException') throw e;
   }
+  console.log(`[base] step 4 done`);
 
   // 5. Allow API Gateway to invoke the existing Lambda
-  // Idempotent — ignore ResourceConflictException if permission already exists
   const accountId = await getAccountId();
+  const sourceArn = `arn:aws:execute-api:${REGION}:${accountId}:${api.ApiId}/*/*`;
+  console.log(`[base] step 5 — AddPermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} sourceArn=${sourceArn}`);
   try {
     await lambda.send(new AddPermissionCommand({
       FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
       StatementId:  `AllowAPIGW-${apiName}-${environment}`,
       Action:       'lambda:InvokeFunction',
       Principal:    'apigateway.amazonaws.com',
-      SourceArn:    `arn:aws:execute-api:${REGION}:${accountId}:${api.ApiId}/*/*`,
+      SourceArn:    sourceArn,
       Qualifier:    'live',
     }));
   } catch (e) {
@@ -101,6 +112,7 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
       throw e;
     }
   }
+  console.log(`[base] step 5 done — createHttpApiBase complete`);
 
   return {
     apiId:           api.ApiId,

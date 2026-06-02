@@ -13,36 +13,47 @@ const {
   AddPermissionCommand, RemovePermissionCommand,
 } = require('./base');
 
-const REGION = process.env.AWS_ACCOUNT_REGION;
+// AWS_ACCOUNT_REGION is the custom env var; AWS_REGION is set automatically by Lambda runtime
+const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
 
 async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
+  console.log(`[http-custom-key] create start — apiName=${apiName} env=${environment} region=${REGION}`);
+  console.log(`[http-custom-key] env vars — AUTHORIZER_ARN=${process.env.EXISTING_AUTHORIZER_LAMBDA_ARN} AUTHORIZER_FN=${process.env.EXISTING_AUTHORIZER_FUNCTION_NAME}`);
+
   const base = await createHttpApiBase(
     apiName, environment,
     `Custom Lambda authorizer HTTP API — X-Api-Key, ${httpMethod} ${routePath}`,
     { onApiCreated }
   );
+  console.log(`[http-custom-key] base created — apiId=${base.apiId}`);
 
   // Allow API Gateway to invoke the EXISTING authorizer Lambda
   const accountId = await getAccountId();
+  const authSourceArn = `arn:aws:execute-api:${REGION}:${accountId}:${base.apiId}/authorizers/*`;
+  console.log(`[http-custom-key] adding Lambda permission — FunctionName=${process.env.EXISTING_AUTHORIZER_FUNCTION_NAME} SourceArn=${authSourceArn}`);
+
   await lambda.send(new AddPermissionCommand({
     FunctionName: process.env.EXISTING_AUTHORIZER_FUNCTION_NAME,
     StatementId:  `AllowAuthorizerAPIGW-${apiName}-${environment}`,
     Action:       'lambda:InvokeFunction',
     Principal:    'apigateway.amazonaws.com',
-    SourceArn:    `arn:aws:execute-api:${REGION}:${accountId}:${base.apiId}/authorizers/*`,
+    SourceArn:    authSourceArn,
   }));
+  console.log(`[http-custom-key] Lambda permission added`);
 
   // Create Lambda REQUEST authorizer — simple response format
+  console.log(`[http-custom-key] creating REQUEST authorizer — uri=${process.env.EXISTING_AUTHORIZER_LAMBDA_ARN}`);
   const authorizer = await apigw.send(new CreateAuthorizerCommand({
     ApiId:                           base.apiId,
     Name:                            `${apiName}-${environment}-lambda-authorizer`,
     AuthorizerType:                  'REQUEST',
     AuthorizerUri:                   process.env.EXISTING_AUTHORIZER_LAMBDA_ARN,
     AuthorizerPayloadFormatVersion:  '2.0',
-    EnableSimpleResponses:           true,  // ← critical: expects { isAuthorized: true/false }
-    AuthorizerResultTtlInSeconds:    300,   // cache 5 min — reduces Lambda invocations
+    EnableSimpleResponses:           true,  // ← expects { isAuthorized: true/false }
+    AuthorizerResultTtlInSeconds:    300,   // cache 5 min
     IdentitySource:                  '$request.header.X-Api-Key',
   }));
+  console.log(`[http-custom-key] authorizer created — authorizerId=${authorizer.AuthorizerId}`);
 
   // Create route with CUSTOM auth
   await apigw.send(new CreateRouteCommand({
@@ -52,6 +63,7 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     AuthorizerId:      authorizer.AuthorizerId,
     Target:            `integrations/${base.integrationId}`,
   }));
+  console.log(`[http-custom-key] route created — ${httpMethod} ${routePath}`);
 
   return {
     api_id:        base.apiId,
@@ -85,4 +97,3 @@ async function destroy({ api_id, api_name, environment, resources }) {
 }
 
 module.exports = { create, destroy };
-
