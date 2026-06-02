@@ -1,0 +1,314 @@
+name: "🌐 Web GUI — Deploy / Update / Destroy"
+
+# ============================================================================
+# Manages the self-service API Portal (web-gui) lifecycle.
+#
+# Actions:
+#   deploy   → Build React + deploy Terraform (S3 + Lambda + API GW + DynamoDB)
+#   update   → Rebuild React UI + re-upload to S3 (fast — skips Terraform infra)
+#   destroy  → terraform destroy — removes ALL web-gui AWS resources
+#
+# Reads existing stack outputs automatically — no manual var input needed.
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: |
+          Action to perform:
+          • deploy   → first-time deploy OR re-deploy full infrastructure
+          • update   → rebuild React UI only (faster — no Terraform changes)
+          • destroy  → permanently remove all web-gui AWS resources
+        required: true
+        type: choice
+        default: "deploy"
+        options:
+          - deploy
+          - update
+          - destroy
+
+      environment:
+        description: "Target environment (must match existing stack)"
+        required: true
+        type: choice
+        default: "dev"
+        options:
+          - dev
+          - sit
+          - stage
+          - prod
+
+      confirm:
+        description: |
+          Type 'deploy', 'update', or 'destroy' to confirm the action.
+          Prevents accidental execution.
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ── Safety check ─────────────────────────────────────────────────────────────
+  confirm:
+    name: "🔒 Safety Check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify confirmation matches action
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "${{ github.event.inputs.action }}" ]; then
+            echo "❌ Confirmation '${{ github.event.inputs.confirm }}' does not match action '${{ github.event.inputs.action }}'"
+            exit 1
+          fi
+          echo "✅ Confirmed: ${{ github.event.inputs.action }} → ${{ github.event.inputs.environment }}"
+
+  # ── DEPLOY — full infrastructure + React build ────────────────────────────────
+  deploy:
+    name: "🚀 Deploy Web GUI [${{ github.event.inputs.environment }}]"
+    runs-on: ubuntu-latest
+    needs: confirm
+    if: github.event.inputs.action == 'deploy'
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-north-1' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: web-gui/ui/package.json
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.7"
+
+      # ── Step 1: Install GUI Lambda dependencies ───────────────────────────────
+      - name: Install Lambda dependencies
+        run: npm install --omit=dev
+        working-directory: web-gui/backend
+
+      # ── Step 2: Build React app ───────────────────────────────────────────────
+      - name: Install React dependencies
+        run: npm install
+        working-directory: web-gui/frontend
+
+      - name: Build React app
+        run: npm run build
+        working-directory: web-gui/frontend
+
+      # ── Step 3: Read existing stack outputs ───────────────────────────────────
+      - name: Read existing stack outputs
+        id: stack
+        run: |
+          cd environments/${{ github.event.inputs.environment }}
+          terraform init -input=false \
+            -backend-config="bucket=tf-state-397979615352" \
+            -backend-config="key=${{ github.event.inputs.environment }}/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION || 'eu-north-1' }}" \
+            -backend-config="dynamodb_table=terraform-lock" \
+            -backend-config="encrypt=true"
+          echo "lambda_function_name=$(terraform output -raw lambda_function_name)"       >> $GITHUB_OUTPUT
+          echo "cognito_user_pool_id=$(terraform output -raw cognito_user_pool_id)"       >> $GITHUB_OUTPUT
+          echo "cognito_client_id=$(terraform output -raw cognito_client_id)"             >> $GITHUB_OUTPUT
+
+      # ── Step 4: Deploy Terraform infrastructure ───────────────────────────────
+      - name: Terraform Init (web-gui)
+        working-directory: web-gui/infrastructure
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=tf-state-397979615352" \
+            -backend-config="key=web-gui-${{ github.event.inputs.environment }}/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION || 'eu-north-1' }}" \
+            -backend-config="dynamodb_table=terraform-lock" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Apply
+        working-directory: web-gui/infrastructure
+        run: |
+          REGION="${{ vars.AWS_REGION || 'eu-north-1' }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          LAMBDA_NAME="${{ steps.stack.outputs.lambda_function_name }}"
+
+          terraform apply -auto-approve -input=false \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="existing_aws_region=${REGION}" \
+            -var="existing_lambda_arn=arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${LAMBDA_NAME}:live" \
+            -var="existing_lambda_function_name=${LAMBDA_NAME}" \
+            -var="existing_cognito_pool_id=${{ steps.stack.outputs.cognito_user_pool_id }}" \
+            -var="existing_cognito_client_id=${{ steps.stack.outputs.cognito_client_id }}" \
+            -var="existing_authorizer_lambda_arn=arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:api-demo-${{ github.event.inputs.environment }}-lambda-authorizer" \
+            -var="existing_authorizer_function_name=api-demo-${{ github.event.inputs.environment }}-lambda-authorizer"
+
+      - name: Show GUI URL
+        working-directory: web-gui/infrastructure
+        run: |
+          GUI_URL=$(terraform output -raw gui_url)
+          BACKEND_URL=$(terraform output -raw backend_api_url)
+          echo "## 🌐 Web GUI Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|--|--|" >> $GITHUB_STEP_SUMMARY
+          echo "| **GUI URL** | $GUI_URL |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Backend API** | $BACKEND_URL |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ github.event.inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployed by** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Open in browser: $GUI_URL"
+
+  # ── UPDATE — rebuild React only, re-upload to S3 ──────────────────────────────
+  update:
+    name: "🔄 Update Web GUI UI [${{ github.event.inputs.environment }}]"
+    runs-on: ubuntu-latest
+    needs: confirm
+    if: github.event.inputs.action == 'update'
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-north-1' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: web-gui/frontend/package.json
+
+      - name: Install + Build React
+        run: |
+          npm install
+          npm run build
+        working-directory: web-gui/frontend
+
+      - name: Get S3 bucket name
+        id: bucket
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGION="${{ vars.AWS_REGION || 'eu-north-1' }}"
+          echo "name=api-portal-${{ github.event.inputs.environment }}-frontend-${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+
+      - name: Sync React build to S3
+        run: |
+          aws s3 sync web-gui/frontend/dist/ s3://${{ steps.bucket.outputs.name }}/ \
+            --delete \
+            --cache-control "max-age=31536000" \
+            --exclude "index.html" \
+            --exclude "config.js"
+
+          # index.html must not be cached (always fetch fresh)
+          aws s3 cp web-gui/ui/dist/index.html s3://${{ steps.bucket.outputs.name }}/index.html \
+            --cache-control "no-cache, no-store, must-revalidate"
+
+      - name: Summary
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGION="${{ vars.AWS_REGION || 'eu-north-1' }}"
+          echo "## 🔄 Web GUI UI Updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "React build re-uploaded to S3. Infrastructure unchanged." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|--|--|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Bucket** | api-portal-${{ github.event.inputs.environment }}-frontend-${ACCOUNT_ID} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Updated by** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ── DESTROY — remove all web-gui AWS resources ────────────────────────────────
+  destroy:
+    name: "🗑️ Destroy Web GUI [${{ github.event.inputs.environment }}]"
+    runs-on: ubuntu-latest
+    needs: confirm
+    if: github.event.inputs.action == 'destroy'
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-north-1' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install Lambda dependencies (needed for Terraform archive)
+        run: npm install --omit=dev
+        working-directory: web-gui/backend
+
+      # Build React so Terraform can reference dist/ during destroy
+      - name: Build React (needed for Terraform plan)
+        run: npm install && npm run build
+        working-directory: web-gui/frontend
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.7"
+
+      - name: Empty S3 bucket (required before destroy)
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET="api-portal-${{ github.event.inputs.environment }}-frontend-${ACCOUNT_ID}"
+          aws s3 rm s3://${BUCKET}/ --recursive || echo "Bucket already empty or does not exist"
+
+      - name: Terraform Init (web-gui)
+        working-directory: web-gui/infrastructure
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=tf-state-397979615352" \
+            -backend-config="key=web-gui-${{ github.event.inputs.environment }}/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION || 'eu-north-1' }}" \
+            -backend-config="dynamodb_table=terraform-lock" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Destroy
+        working-directory: web-gui/infrastructure
+        run: |
+          REGION="${{ vars.AWS_REGION || 'eu-north-1' }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+          terraform destroy -auto-approve -input=false \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="existing_aws_region=${REGION}" \
+            -var="existing_lambda_arn=arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:placeholder" \
+            -var="existing_lambda_function_name=placeholder" \
+            -var="existing_cognito_pool_id=placeholder" \
+            -var="existing_cognito_client_id=placeholder" \
+            -var="existing_authorizer_lambda_arn=arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:placeholder" \
+            -var="existing_authorizer_function_name=placeholder"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🗑️ Web GUI Destroyed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|--|--|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ github.event.inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Destroyed by | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All web-gui AWS resources removed: S3, Lambda, API Gateway, DynamoDB, IAM roles." >> $GITHUB_STEP_SUMMARY
+
