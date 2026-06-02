@@ -25,7 +25,7 @@ const {
 
 const { LambdaClient, AddPermissionCommand, RemovePermissionCommand } = require('@aws-sdk/client-lambda');
 
-const REGION = process.env.AWS_ACCOUNT_REGION;
+const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
 const apigwV1 = new APIGatewayClient({ region: REGION });
 const lambdaClient = new LambdaClient({ region: REGION });
 
