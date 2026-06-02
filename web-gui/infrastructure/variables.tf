@@ -21,17 +21,22 @@ variable "environment" {
 # Get values from: terraform -chdir=environments/dev output
 
 variable "existing_lambda_arn" {
-  description = "ARN of the existing api-demo-dev-lambda (live alias)"
+  description = <<-EOT
+    API Gateway INVOKE ARN of the existing Lambda live alias.
+    Must be in API GW format (NOT plain Lambda ARN):
+      arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/{lambda-arn}:live/invocations
+    Run generate-tfvars.sh to get the correct value automatically.
+  EOT
   type        = string
 }
 
 variable "existing_lambda_function_name" {
-  description = "Function name of the existing backend Lambda"
+  description = "Function name of the existing backend Lambda (just the name, no ARN, no alias)"
   type        = string
 }
 
 variable "existing_cognito_pool_id" {
-  description = "Cognito User Pool ID from the existing stack"
+  description = "Cognito User Pool ID from the existing stack (e.g. eu-north-1_XXXXXXXX)"
   type        = string
 }
 
@@ -41,12 +46,17 @@ variable "existing_cognito_client_id" {
 }
 
 variable "existing_authorizer_lambda_arn" {
-  description = "ARN of the existing custom authorizer Lambda"
+  description = <<-EOT
+    API Gateway INVOKE ARN of the existing custom authorizer Lambda.
+    Must be in API GW format (NOT plain Lambda ARN):
+      arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/{lambda-arn}/invocations
+    Run generate-tfvars.sh to get the correct value automatically.
+  EOT
   type        = string
 }
 
 variable "existing_authorizer_function_name" {
-  description = "Function name of the existing custom authorizer Lambda"
+  description = "Function name of the existing custom authorizer Lambda (just the name, no ARN)"
   type        = string
 }
 
