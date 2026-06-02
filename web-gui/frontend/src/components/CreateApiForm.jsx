@@ -16,15 +16,17 @@ const INITIAL_FORM  = {
 };
 
 export default function CreateApiForm({ onSubmit, onError }) {
-  const [form, setForm]         = useState(INITIAL_FORM);
-  const [loading, setLoading]   = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [form, setForm]             = useState(INITIAL_FORM);
+  const [loading, setLoading]       = useState(false);
+  const [errorMsg, setErrorMsg]     = useState('');
+  const [errorDetails, setErrorDetails] = useState(null);
 
   const isRestApi = form.api_type === 'rest-usage-plan';
   const apiDesc   = API_TYPES.find(t => t.value === form.api_type)?.desc ?? '';
 
   const set = (field) => (e) => {
     setErrorMsg('');
+    setErrorDetails(null);
     setForm(f => ({ ...f, [field]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }));
   };
 
@@ -32,6 +34,7 @@ export default function CreateApiForm({ onSubmit, onError }) {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
+    setErrorDetails(null);
     try {
       await onSubmit({
         api_name:              form.api_name.trim(),
@@ -45,9 +48,11 @@ export default function CreateApiForm({ onSubmit, onError }) {
       });
       setForm(INITIAL_FORM);
       setErrorMsg('');
+      setErrorDetails(null);
     } catch (err) {
-      const msg = `${err.message}${err.details ? ': ' + JSON.stringify(err.details) : ''}`;
+      const msg = err.message || 'Unknown error — check browser console for details';
       setErrorMsg(msg);
+      setErrorDetails(err.details && typeof err.details === 'object' ? err.details : null);
       onError(msg);
     } finally {
       setLoading(false);
@@ -142,14 +147,20 @@ export default function CreateApiForm({ onSubmit, onError }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
             </svg>
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <p className="font-semibold">API creation failed</p>
-              <p className="mt-0.5 text-red-600 break-words">{errorMsg}</p>
+              <p className="mt-0.5 text-red-600 break-words whitespace-pre-wrap">{errorMsg}</p>
+              {/* Show AWS request ID for CloudWatch cross-reference */}
+              {errorDetails?.requestId && (
+                <p className="mt-1 text-xs text-red-400 font-mono break-all">
+                  AWS RequestId: {errorDetails.requestId}
+                </p>
+              )}
             </div>
             {/* Dismiss button */}
             <button
               type="button"
-              onClick={() => setErrorMsg('')}
+              onClick={() => { setErrorMsg(''); setErrorDetails(null); }}
               className="shrink-0 text-red-400 hover:text-red-600 transition-colors"
               aria-label="Dismiss error"
             >

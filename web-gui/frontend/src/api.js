@@ -10,12 +10,41 @@ const BASE_URL =
   'http://localhost:3000';
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
-  });
-  const data = await res.json();
-  if (!res.ok) throw Object.assign(new Error(data.error ?? 'Request failed'), { details: data.details, status: res.status });
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      ...options,
+    });
+  } catch (networkErr) {
+    // fetch() itself threw — backend unreachable
+    throw Object.assign(new Error('Cannot reach backend — check your network or server'), {
+      details: null, status: 0,
+    });
+  }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    // Response wasn't JSON (e.g. Lambda cold-start HTML error page)
+    throw Object.assign(
+      new Error(`Backend returned a non-JSON response (HTTP ${res.status})`),
+      { details: null, status: res.status },
+    );
+  }
+
+  if (!res.ok) {
+    // Build a human-readable message from the structured AWS error detail
+    const detail = data.details;
+    let message = data.error ?? 'Request failed';
+    if (detail && typeof detail === 'object' && detail.message && detail.message !== message) {
+      message = `${message}: [${detail.code ?? 'ERR'}] ${detail.message}`;
+    } else if (detail && typeof detail === 'string') {
+      message = `${message}: ${detail}`;
+    }
+    throw Object.assign(new Error(message), { details: data.details, status: res.status });
+  }
   return data;
 }
 

@@ -57,6 +57,26 @@ function err(message, status = 400, details = null) {
   return { statusCode: status, headers: CORS, body: JSON.stringify({ error: message, details }) };
 }
 
+// ── AWS error serialiser ──────────────────────────────────────────────────────
+// AWS SDK v3 errors often have message="UnknownError" but the real cause is in
+// e.name (e.g. "ValidationException"), e.Code, e.$metadata.httpStatusCode, etc.
+function serializeAwsError(e) {
+  const code    = e.name || e.Code || e.code || 'UnknownError';
+  const message = (e.message && e.message !== 'UnknownError')
+    ? e.message
+    : (e.Error?.Message || e.Message || code);
+  return {
+    code,
+    message,
+    httpStatus: e.$metadata?.httpStatusCode ?? null,
+    requestId:  e.$metadata?.requestId      ?? null,
+    // Include any extra AWS-specific fields that explain the problem
+    ...(e.detail         && { detail:         e.detail }),
+    ...(e.reason         && { reason:         e.reason }),
+    ...(e.OAuthError     && { OAuthError:     e.OAuthError }),
+  };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
   const method   = event.requestContext?.http?.method;
@@ -106,10 +126,11 @@ exports.handler = async (event) => {
           },
         });
       } catch (provisionError) {
-        // Mark as failed in DynamoDB
-        await db.updateStatus(body.api_name, 'FAILED', { error_message: provisionError.message });
+        // Serialise the full AWS SDK error — .message alone is often "UnknownError"
+        const errDetail = serializeAwsError(provisionError);
+        await db.updateStatus(body.api_name, 'FAILED', { error_message: errDetail.message });
         console.error('[handler] Provisioning failed:', provisionError);
-        return err('Provisioning failed', 500, provisionError.message);
+        return err('Provisioning failed', 500, errDetail);
       }
 
       // Update DynamoDB with created resource IDs
@@ -180,9 +201,10 @@ exports.handler = async (event) => {
           resources:   item.resources ? JSON.parse(item.resources) : {},
         });
       } catch (destroyError) {
-        await db.updateStatus(apiName, 'DELETE_FAILED', { error_message: destroyError.message });
+        const errDetail = serializeAwsError(destroyError);
+        await db.updateStatus(apiName, 'DELETE_FAILED', { error_message: errDetail.message });
         console.error('[handler] Destroy failed:', destroyError);
-        return err('Destroy failed', 500, destroyError.message);
+        return err('Destroy failed', 500, errDetail);
       }
 
       await db.deleteApi(apiName);
@@ -193,6 +215,6 @@ exports.handler = async (event) => {
 
   } catch (e) {
     console.error('[handler] Unhandled error:', e);
-    return err('Internal server error', 500, e.message);
+    return err('Internal server error', 500, serializeAwsError(e));
   }
 };
