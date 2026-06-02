@@ -105,10 +105,20 @@ resource "aws_iam_role_policy" "gui_lambda_permissions" {
       },
       # CloudWatch Logs — for API Gateway access logging
       {
-        Sid      = "CloudWatchLogs"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy"]
-        Resource = "arn:aws:logs:*:*:log-group:/aws/apigateway/api-portal-*"
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:DeleteLogGroup",
+          "logs:PutRetentionPolicy",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = [
+          # Log groups created by the provisioner: /<name>-<env>-api
+          "arn:aws:logs:*:*:log-group:/aws/apigateway/*",
+          # CloudWatch IAM checks sometimes include the :log-stream: suffix
+          "arn:aws:logs:*:*:log-group:/aws/apigateway/*:log-stream:*"
+        ]
       },
       # IAM — account-level API GW CloudWatch role (for REST API logging)
       {

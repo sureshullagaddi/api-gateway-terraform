@@ -86,9 +86,14 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
   console.log(`[base] step 4 — CreateLogGroup ${logGroupName}`);
   try {
     await logs.send(new CreateLogGroupCommand({ logGroupName }));
-    await logs.send(new PutRetentionPolicyCommand({ logGroupName, retentionInDays: 14 }));
   } catch (e) {
     if (e.name !== 'ResourceAlreadyExistsException') throw e;
+  }
+  // PutRetentionPolicy is cosmetic — warn but never fail provisioning
+  try {
+    await logs.send(new PutRetentionPolicyCommand({ logGroupName, retentionInDays: 14 }));
+  } catch (e) {
+    console.warn(`[base] Could not set log retention (non-fatal): ${e.name} — ${e.message}`);
   }
   console.log(`[base] step 4 done`);
 
