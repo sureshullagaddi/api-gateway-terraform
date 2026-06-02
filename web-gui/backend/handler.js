@@ -24,6 +24,21 @@ const provisioners = {
   'rest-usage-plan':  require('./provisioners/rest-usage-plan'),
 };
 
+// ── Required env vars per api_type — checked before provisioning ──────────────
+const REQUIRED_ENV_VARS = {
+  'http-public':     ['EXISTING_LAMBDA_ARN', 'EXISTING_LAMBDA_FUNCTION_NAME'],
+  'http-jwt':        ['EXISTING_LAMBDA_ARN', 'EXISTING_LAMBDA_FUNCTION_NAME', 'EXISTING_COGNITO_POOL_ID', 'EXISTING_COGNITO_CLIENT_ID'],
+  'http-custom-key': ['EXISTING_LAMBDA_ARN', 'EXISTING_LAMBDA_FUNCTION_NAME', 'EXISTING_AUTHORIZER_LAMBDA_ARN', 'EXISTING_AUTHORIZER_FUNCTION_NAME'],
+  'http-iam':        ['EXISTING_LAMBDA_ARN', 'EXISTING_LAMBDA_FUNCTION_NAME'],
+  'rest-usage-plan': ['EXISTING_LAMBDA_ARN', 'EXISTING_LAMBDA_FUNCTION_NAME'],
+};
+
+function checkEnvVars(apiType) {
+  const required = REQUIRED_ENV_VARS[apiType] ?? [];
+  const missing  = required.filter(v => !process.env[v]);
+  return missing;
+}
+
 // ── Input validation ──────────────────────────────────────────────────────────
 const VALID_API_TYPES   = Object.keys(provisioners);
 const VALID_HTTP_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
@@ -96,6 +111,15 @@ exports.handler = async (event) => {
       const existing = await db.getApi(body.api_name);
       if (existing) return err(`API '${body.api_name}' already exists. Use DELETE to remove it first.`, 409);
 
+      // ── Early env-var check — fail fast with a clear message ─────────────────
+      const missingVars = checkEnvVars(body.api_type);
+      if (missingVars.length) {
+        return err(
+          `Missing required environment variables for ${body.api_type}: ${missingVars.join(', ')}. Check Lambda environment config.`,
+          500
+        );
+      }
+
       // Save initial record with CREATING status
       await db.saveApi({
         api_name:    body.api_name,
@@ -135,13 +159,15 @@ exports.handler = async (event) => {
 
       // Update DynamoDB with created resource IDs
       await db.updateStatus(body.api_name, 'ACTIVE', {
-        api_id:       result.api_id,
-        api_endpoint: result.api_endpoint,
-        route_url:    result.route_url,
-        resources:    JSON.stringify(result.resources ?? {}),
-        test_hint:    result.test_hint ?? null,
-        api_key_id:   result.api_key_id ?? null,
+        api_id:        result.api_id,
+        api_endpoint:  result.api_endpoint,
+        route_url:     result.route_url,
+        resources:     JSON.stringify(result.resources ?? {}),
+        test_hint:     result.test_hint     ?? null,
+        api_key_id:    result.api_key_id    ?? null,
         usage_plan_id: result.usage_plan_id ?? null,
+        // partner_name from provisioner result (REST usage plan sets this)
+        partner_name:  result.partner_name  ?? body.partner_name ?? null,
       });
 
       return ok({

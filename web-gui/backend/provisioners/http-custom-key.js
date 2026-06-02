@@ -41,7 +41,7 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     AuthorizerPayloadFormatVersion:  '2.0',
     EnableSimpleResponses:           true,  // ← critical: expects { isAuthorized: true/false }
     AuthorizerResultTtlInSeconds:    300,   // cache 5 min — reduces Lambda invocations
-    IdentitySources:                 ['$request.header.X-Api-Key'],
+    IdentitySource:                  '$request.header.X-Api-Key',
   }));
 
   // Create route with CUSTOM auth
