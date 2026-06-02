@@ -16,18 +16,22 @@ const INITIAL_FORM  = {
 };
 
 export default function CreateApiForm({ onSubmit, onError }) {
-  const [form, setForm]       = useState(INITIAL_FORM);
-  const [loading, setLoading] = useState(false);
+  const [form, setForm]         = useState(INITIAL_FORM);
+  const [loading, setLoading]   = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const isRestApi = form.api_type === 'rest-usage-plan';
   const apiDesc   = API_TYPES.find(t => t.value === form.api_type)?.desc ?? '';
 
-  const set = (field) => (e) =>
+  const set = (field) => (e) => {
+    setErrorMsg('');
     setForm(f => ({ ...f, [field]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setErrorMsg('');
     try {
       await onSubmit({
         api_name:              form.api_name.trim(),
@@ -40,8 +44,11 @@ export default function CreateApiForm({ onSubmit, onError }) {
         rate_limit_per_second: isRestApi ? form.rate_limit_per_second : undefined,
       });
       setForm(INITIAL_FORM);
+      setErrorMsg('');
     } catch (err) {
-      onError(`${err.message}${err.details ? ': ' + JSON.stringify(err.details) : ''}`);
+      const msg = `${err.message}${err.details ? ': ' + JSON.stringify(err.details) : ''}`;
+      setErrorMsg(msg);
+      onError(msg);
     } finally {
       setLoading(false);
     }
@@ -124,6 +131,32 @@ export default function CreateApiForm({ onSubmit, onError }) {
                 <input type="number" value={form.rate_limit_per_second} onChange={set('rate_limit_per_second')} min={1} className={input} />
               </Field>
             </div>
+          </div>
+        )}
+
+        {/* Inline error banner — persists until user edits form or retries */}
+        {errorMsg && (
+          <div className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            {/* Error icon */}
+            <svg className="w-5 h-5 mt-0.5 shrink-0 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+            <div className="flex-1">
+              <p className="font-semibold">API creation failed</p>
+              <p className="mt-0.5 text-red-600 break-words">{errorMsg}</p>
+            </div>
+            {/* Dismiss button */}
+            <button
+              type="button"
+              onClick={() => setErrorMsg('')}
+              className="shrink-0 text-red-400 hover:text-red-600 transition-colors"
+              aria-label="Dismiss error"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
         )}
 
