@@ -87,7 +87,7 @@ jobs:
         with:
           node-version: "18"
           cache: "npm"
-          cache-dependency-path: web-gui/ui/package.json
+          cache-dependency-path: web-gui/frontend/package.json
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -214,7 +214,7 @@ jobs:
             --exclude "config.js"
 
           # index.html must not be cached (always fetch fresh)
-          aws s3 cp web-gui/ui/dist/index.html s3://${{ steps.bucket.outputs.name }}/index.html \
+          aws s3 cp web-gui/frontend/dist/index.html s3://${{ steps.bucket.outputs.name }}/index.html \
             --cache-control "no-cache, no-store, must-revalidate"
 
       - name: Summary
