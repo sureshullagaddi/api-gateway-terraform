@@ -8,7 +8,7 @@
 
 const {
   createHttpApiBase, deleteHttpApiBase,
-  apigw, lambda,
+  apigw, lambda, getAccountId,
   CreateRouteCommand, CreateAuthorizerCommand,
   AddPermissionCommand, RemovePermissionCommand,
 } = require('./base');
@@ -22,12 +22,13 @@ async function create({ apiName, environment, routePath, httpMethod }) {
   );
 
   // Allow API Gateway to invoke the EXISTING authorizer Lambda
+  const accountId = await getAccountId();
   await lambda.send(new AddPermissionCommand({
     FunctionName: process.env.EXISTING_AUTHORIZER_FUNCTION_NAME,
     StatementId:  `AllowAuthorizerAPIGW-${apiName}-${environment}`,
     Action:       'lambda:InvokeFunction',
     Principal:    'apigateway.amazonaws.com',
-    SourceArn:    `arn:aws:execute-api:${REGION}:*:${base.apiId}/authorizers/*`,
+    SourceArn:    `arn:aws:execute-api:${REGION}:${accountId}:${base.apiId}/authorizers/*`,
   }));
 
   // Create Lambda REQUEST authorizer — simple response format

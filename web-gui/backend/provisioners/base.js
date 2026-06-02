@@ -1,12 +1,5 @@
 'use strict';
 
-/**
- * provisioners/base.js
- *
- * Shared AWS SDK clients and helper utilities used by all provisioners.
- * Each provisioner (http-public, http-jwt, etc.) imports from here.
- */
-
 const {
   ApiGatewayV2Client,
   CreateApiCommand,
@@ -30,11 +23,24 @@ const {
   DeleteLogGroupCommand,
 } = require('@aws-sdk/client-cloudwatch-logs');
 
+const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts');
+
 const REGION = process.env.AWS_ACCOUNT_REGION;
 
 const apigw  = new ApiGatewayV2Client({ region: REGION });
 const lambda = new LambdaClient({ region: REGION });
 const logs   = new CloudWatchLogsClient({ region: REGION });
+const sts    = new STSClient({ region: REGION });
+
+// Cache account ID — fetched once per Lambda container lifetime
+let _accountId = null;
+async function getAccountId() {
+  if (!_accountId) {
+    const res = await sts.send(new GetCallerIdentityCommand({}));
+    _accountId = res.Account;
+  }
+  return _accountId;
+}
 
 /**
  * Creates the base HTTP API + Lambda integration + stage.
@@ -75,13 +81,14 @@ async function createHttpApiBase(apiName, environment, description) {
 
   // 5. Allow API Gateway to invoke the existing Lambda
   // Idempotent — ignore ResourceConflictException if permission already exists
+  const accountId = await getAccountId();
   try {
     await lambda.send(new AddPermissionCommand({
       FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
       StatementId:  `AllowAPIGW-${apiName}-${environment}`,
       Action:       'lambda:InvokeFunction',
       Principal:    'apigateway.amazonaws.com',
-      SourceArn:    `arn:aws:execute-api:${REGION}:*:${api.ApiId}/*/*`,
+      SourceArn:    `arn:aws:execute-api:${REGION}:${accountId}:${api.ApiId}/*/*`,
       Qualifier:    'live',
     }));
   } catch (e) {
@@ -138,6 +145,7 @@ async function deleteHttpApiBase(apiId, apiName, environment) {
 
 module.exports = {
   apigw, lambda, logs,
+  getAccountId,
   createHttpApiBase,
   deleteHttpApiBase,
   CreateRouteCommand,
