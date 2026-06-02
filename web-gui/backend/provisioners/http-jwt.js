@@ -22,7 +22,7 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     ApiId:          base.apiId,
     Name:           `${apiName}-${environment}-jwt-authorizer`,
     AuthorizerType: 'JWT',
-    IdentitySources: ['$request.header.Authorization'],
+    IdentitySource: '$request.header.Authorization',
     JwtConfiguration: {
       Issuer:   `https://cognito-idp.${REGION}.amazonaws.com/${process.env.EXISTING_COGNITO_POOL_ID}`,
       Audience: [process.env.EXISTING_COGNITO_CLIENT_ID],
