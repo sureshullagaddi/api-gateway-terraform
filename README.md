@@ -1,170 +1,161 @@
 # API Gateway Terraform
 
-A production-grade, multi-environment AWS API Gateway deployment using Terraform modular design, GitHub Actions CI/CD with OIDC authentication, multi-auth API Gateway (Cognito JWT + Custom Lambda), CloudWatch monitoring, WAF protection, and Lambda blue/green deployments.
+Production-grade AWS API Gateway with multi-auth (JWT, Custom Lambda, AWS IAM, Public) deployed across 4 environments via Terraform, plus a self-service GUI portal for provisioning new APIs on-demand.
 
 ---
 
-## Architecture
+## Flow 1 — Core API Stack
 
-### 1 — Runtime Request Flow
+### What it does
+
+Deploys a fully protected HTTP API (v2) backed by a single Lambda function. Every route uses a different auth strategy — demonstrating all four API Gateway v2 auth types in one stack.
+
+| Route | Auth | How |
+|---|---|---|
+| `GET /secure` | JWT — Cognito | API GW validates the `Bearer` token signature, issuer, audience and expiry natively — Lambda never sees invalid tokens |
+| `GET /admin` | Custom Lambda | A second Lambda reads the `X-Api-Key` header and returns `{ isAuthorized: true/false }` — 5 min cache reduces cold invocations |
+| `GET /internal` | AWS IAM SigV4 | Only callers that sign requests with valid AWS credentials and `execute-api:Invoke` permission reach the Lambda |
+| `GET /health` | None (public) | No auth — open to anyone |
+
+### Architecture
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as 👤 User / Client
-    participant Cognito as 🔐 AWS Cognito<br/>(Auth Server)
-    participant WAF as 🛡️ AWS WAF v2
-    participant APIGW as 🚪 API Gateway<br/>(HTTP API)
-    participant JWTAuth as 🔑 JWT Authorizer<br/>(Cognito)
-    participant LambdaAuth as 🔑 Lambda Authorizer<br/>(Custom)
-    participant Lambda as ⚡ Lambda<br/>("live" alias)
-    participant CW as 📊 CloudWatch + X-Ray
+    actor C as Client
+    participant WAF as WAF v2
+    participant GW as API Gateway HTTP API
+    participant Auth as JWT / Lambda / IAM Authorizer
+    participant L as Lambda (live alias)
 
-    Note over User,Cognito: Path A — JWT Auth (GET /secure)
-    User->>Cognito: POST InitiateAuth (email + password)
-    Cognito-->>User: IdToken (JWT, 1h TTL)
-    User->>WAF: GET /secure  Authorization: Bearer jwt
-    WAF->>APIGW: Forward (rate limit passed)
-    APIGW->>JWTAuth: Validate JWT signature + issuer + audience + expiry
-    JWTAuth-->>APIGW: Claims (sub, email)
-    APIGW->>Lambda: Invoke with JWT claims in event.requestContext.authorizer.jwt
-    Lambda->>CW: Logs + X-Ray trace
-    Lambda-->>User: 200 JSON — authMethod jwt
+    Note over C,L: JWT path — GET /secure
+    C->>WAF: GET /secure  Authorization: Bearer <IdToken>
+    WAF->>GW: forward (rate check passed)
+    GW->>Auth: validate JWT (signature + issuer + audience + expiry)
+    Auth-->>GW: claims {sub, email}
+    GW->>L: invoke with claims in event.requestContext.authorizer.jwt
+    L-->>C: 200 {authMethod: jwt-cognito}
 
-    Note over User,CW: Path B — Custom Lambda Auth (GET /admin)
-    User->>WAF: GET /admin  X-Api-Key: my-secret-key-123
-    WAF->>APIGW: Forward
-    APIGW->>LambdaAuth: Invoke authorizer Lambda with X-Api-Key header
-    LambdaAuth-->>APIGW: isAuthorized true (simple response format)
-    APIGW->>Lambda: Invoke main Lambda
-    Lambda-->>User: 200 JSON — authMethod custom
+    Note over C,L: Custom Key path — GET /admin
+    C->>GW: GET /admin  X-Api-Key: my-secret-key-123
+    GW->>Auth: invoke authorizer Lambda
+    Auth-->>GW: {isAuthorized: true}
+    GW->>L: invoke main Lambda
+    L-->>C: 200 {authMethod: custom-lambda-apikey}
 
-    Note over User,CW: Path C — Public (GET /health)
-    User->>APIGW: GET /health (no auth header needed)
-    APIGW->>Lambda: Invoke directly — no authorizer
-    Lambda-->>User: 200 JSON — authMethod none
+    Note over C,L: Public path — GET /health
+    C->>GW: GET /health
+    GW->>L: invoke directly (no authorizer)
+    L-->>C: 200 {authMethod: none}
 ```
+
+### Components & Why
+
+| Component | Why |
+|---|---|
+| **API Gateway HTTP API v2** | Native JWT authorizer — no Lambda cold-start for token validation. Cheaper per-call than REST API v1. |
+| **Cognito User Pool + App Client** | Managed OIDC identity — handles token issuance, refresh, and expiry. No auth server to run. |
+| **Lambda — main handler** (`api-demo-{env}-lambda`) | Single function handles all routes. Detects auth type from `event.requestContext.authorizer`. Blue/green via `live` alias. |
+| **Lambda — custom authorizer** (`api-demo-{env}-lambda-authorizer`) | Validates `X-Api-Key` header with `enable_simple_responses = true`. Result cached 5 min — Lambda invoked once per key per cache window. |
+| **WAF v2** | Rate limiting per IP + AWS managed rules. Enabled in sit/stage/prod, disabled in dev to save cost. |
+| **CloudWatch Logs + Alarms + Dashboard** | JSON access logs per request. 5 alarms (errors, throttles, duration). SNS email on breach. |
+| **Lambda `live` alias** | Blue/green — rollback in one CLI command by pointing `live` to a previous published version number. |
+| **Terraform modules** | `cognito`, `lambda`, `api-gateway`, `monitoring` composed by `stack`. Each environment calls `module.stack` with different knobs. |
+| **S3 + DynamoDB (state)** | Remote Terraform state with locking — safe concurrent CI/CD runs. |
+| **OIDC (GitHub → AWS)** | No static credentials stored in GitHub. Short-lived tokens exchanged at runtime via `AssumeRoleWithWebIdentity`. |
+
+### Cost (dev environment)
+
+| Service | Cost |
+|---|---|
+| API Gateway HTTP API — 1 M calls/month free | **$0** |
+| Lambda (2 functions) — 1 M req + 400K GB-s free | **$0** |
+| Cognito — 50 K MAU free | **$0** |
+| CloudWatch Logs — 5 GB/month free | **$0** |
+| WAF v2 — disabled in dev | **$0** |
+| S3 + DynamoDB (Terraform state) | **$0** |
+| **Total dev** | **~$0/month** |
+
+> WAF adds ~**$5/month** when enabled in sit/stage/prod.
 
 ---
 
-### 2 — Infrastructure & Module Structure
+## Flow 2 — Self-Service GUI Portal
+
+### What it does
+
+A React web app that lets any team member create, inspect, and delete isolated API Gateway endpoints — choosing from 5 auth types — without touching Terraform or the AWS Console. Each provisioned API gets its own API GW ID, routes, and authorizers, tracked in DynamoDB.
+
+**Supported auth types created on-demand:**
+
+| Type | What gets provisioned |
+|---|---|
+| 🌐 HTTP Public | HTTP API v2, route `AuthorizationType: NONE` |
+| 🔐 HTTP JWT | HTTP API v2, JWT authorizer pointing at the existing Cognito pool |
+| 🔑 HTTP Custom Key | HTTP API v2, REQUEST-type Lambda authorizer (`X-Api-Key` header) |
+| 🛡️ HTTP IAM | HTTP API v2, route `AuthorizationType: AWS_IAM` |
+| 📊 REST Usage Plan | REST API v1, usage plan + API key with per-partner daily quota |
+
+### Architecture
 
 ```mermaid
-graph TB
-    subgraph GH["GitHub"]
-        code["Source Code (Terraform + Lambda)"]
-        actions["GitHub Actions\ndeploy_terraform.yml\ndestroy_terraform.yml"]
+graph TD
+    subgraph Browser["Browser"]
+        UI["React + Tailwind\nS3 static site"]
     end
 
-    subgraph BOOT["AWS Bootstrap (one-time)"]
-        s3["S3 Bucket — Terraform State"]
-        dynamo["DynamoDB — State Lock"]
-        oidc["IAM OIDC Provider"]
-        role["IAM Role — github-actions-oidc-role"]
+    subgraph GuiBackend["GUI Backend"]
+        GW_GUI["API Gateway HTTP API\nPOST / GET / DELETE /apis"]
+        L_GUI["GUI Lambda\nhandler.js + provisioners/"]
+        DB["DynamoDB\napi-registry\nstatus · api_id · route_url · resources"]
+        GW_GUI --> L_GUI --> DB
     end
 
-    subgraph MOD["Terraform Modules"]
-        stack["modules/stack (composite)"]
-        cog["modules/cognito"]
-        lam["modules/lambda"]
-        apig["modules/api-gateway"]
-        mon["modules/monitoring"]
-        stack --> cog & lam & apig & mon
+    subgraph Provisioned["Provisioned per request"]
+        NEW_GW["New API Gateway\nHTTP v2 or REST v1"]
+        NEW_AUTH["Authorizer\nJWT · Lambda · IAM · None"]
+        EXISTING_L["Existing backend Lambda\nlive alias"]
+        NEW_GW --> NEW_AUTH
+        NEW_GW --> EXISTING_L
     end
 
-    subgraph ENVS["Environments (each isolated)"]
-        dev["dev — WAF off, low throttle"]
-        sit["sit — WAF on, moderate"]
-        stage["stage — prod-identical"]
-        prod["prod — full protection"]
-    end
-
-    code --> actions
-    actions -- "OIDC token (no stored secrets)" --> oidc --> role
-    actions -- "terraform init" --> s3
-    s3 -. "state lock" .- dynamo
-    ENVS -- "module.stack" --> MOD
-    actions -- "terraform apply" --> ENVS
+    UI -->|"POST /apis\nGET /apis\nDELETE /apis/{name}"| GW_GUI
+    L_GUI -->|"AWS SDK v3\nCreateApi · CreateIntegration\nCreateAuthorizer · CreateRoute"| Provisioned
 ```
 
----
+### Components & Why
 
-### 3 — CI/CD Pipeline Flow
+| Component | Why |
+|---|---|
+| **S3 static website** | Hosts the compiled React build. No server. `config.js` injected at deploy time so the backend URL is runtime-configurable without a rebuild. |
+| **API Gateway HTTP API (GUI)** | Routes browser requests to the GUI Lambda. CORS configured for the S3 origin. |
+| **GUI Lambda** (`api-portal-{env}-gui-lambda`) | Runs `handler.js` + 5 provisioner modules. Each provisioner maps to one auth type and calls AWS SDK directly. Stateless — all state in DynamoDB. |
+| **DynamoDB** (`api-portal-{env}-api-registry`) | Single-table registry keyed on `api_name`. Tracks `status` (CREATING → ACTIVE → DELETING), `api_id`, `route_url`, full `resources` JSON. On-demand billing — no capacity planning needed. |
+| **5 provisioner modules** | One file per auth type (`http-public.js`, `http-jwt.js`, `http-custom-key.js`, `http-iam.js`, `rest-usage-plan.js`). Adding a new auth type = one new file, one registry entry. |
+| **Existing Cognito pool (reused)** | JWT provisioner points new APIs at the same pool — no new user pool per API. Zero extra cost. |
+| **Existing authorizer Lambda (reused)** | Custom Key provisioner adds a scoped Lambda permission per API — the same authorizer function serves every custom-key API. |
+| **React + Tailwind** | SPA for instant feedback. Form validates API name pattern, method, path client-side. Persistent inline error banner on failure shows AWS error code + requestId for CloudWatch lookup. |
 
-```mermaid
-flowchart TD
-    push["git push (any branch)"] --> plan_job
+### Status lifecycle
 
-    subgraph plan_job["plan-dev — non-main branches + PRs"]
-        fmt["terraform fmt -recursive"] --> init1["terraform init"]
-        init1 --> validate["terraform validate"]
-        validate --> plan["terraform plan dev"]
-        plan --> comment{"PR?"}
-        comment -- Yes --> pr_comment["Post plan as PR comment"]
-        comment -- No --> done1["Plan visible in Actions log"]
-    end
-
-    merge["Merge to main"] --> deploy_job
-
-    subgraph deploy_job["deploy — main branch only, plan + apply"]
-        d1["apply dev"] --> d2["apply sit (add to matrix)"]
-        d2 --> d3["apply stage (add to matrix)"]
-        d3 --> d4["apply prod (add to matrix)"]
-        d1 -- "fails?" --> stop["Pipeline stops"]
-    end
-
-    manual_deploy["Manual — workflow_dispatch"] --> safety1["Safety Check\nconfirm == environment?"]
-    safety1 -- No --> abort1["ABORT"]
-    safety1 -- Yes --> deploy_manual["plan + apply\n(apply only if branch = main)"]
-
-    manual_destroy["Manual — workflow_dispatch"] --> safety2["Safety Check\nconfirm == environment?"]
-    safety2 -- No --> abort2["ABORT"]
-    safety2 -- Yes --> preview["terraform plan -destroy"] --> destroy["terraform destroy"]
+```
+Create → CREATING → ACTIVE         happy path
+                  → FAILED          AWS error mid-provision → Force Clear removes registry entry
+Delete → DELETING → (removed)       happy path
+                  → DELETE_FAILED   AWS error mid-destroy  → Force Clear removes registry entry
 ```
 
----
+### Cost (dev, low traffic)
 
-### 4 — AWS Resources Per Environment
-
-```mermaid
-graph LR
-    subgraph ENV["One Environment (e.g. dev)"]
-        subgraph AUTH["Auth"]
-            UP["Cognito User Pool"]
-            CLIENT["App Client — JWT issuer"]
-            UP --- CLIENT
-            AUTHFN["Lambda Authorizer fn\napi-demo-dev-lambda-authorizer"]
-        end
-        subgraph COMPUTE["Compute"]
-            ALIAS["Lambda Alias — live"]
-            VER["Lambda Version N (published)"]
-            ALIAS --> VER
-            ROLE["IAM Role — basic-execution + X-Ray"]
-            VER --- ROLE
-        end
-        subgraph API["API Layer"]
-            WAF2["WAF WebACL (toggle per env)"]
-            GW["API Gateway HTTP API\nthrottle + access logs"]
-            JWTAUTH["JWT Authorizer — GET /secure"]
-            LAMBDAAUTH["Lambda Authorizer — GET /admin\nenable_simple_responses=true"]
-            PUBRT["No Auth — GET /health"]
-            WAF2 --> GW
-            GW --> JWTAUTH --> ALIAS
-            GW --> LAMBDAAUTH --> ALIAS
-            GW --> PUBRT --> ALIAS
-        end
-        subgraph OBS["Observability"]
-            LOGGRP["CloudWatch Log Groups\nLambda + Authorizer + API Gateway"]
-            ALARMS["5 CloudWatch Alarms"]
-            DASH["CloudWatch Dashboard (6 widgets)"]
-            SNS["SNS Topic — email alerts"]
-            ALARMS --> SNS
-        end
-        COMPUTE -.->|logs| LOGGRP
-        API -.->|access logs| LOGGRP
-        LOGGRP -.-> ALARMS --> DASH
-    end
-```
+| Service | Cost |
+|---|---|
+| S3 static hosting | **$0** |
+| API Gateway (GUI API) — < 1 M calls/month | **$0** |
+| GUI Lambda — < 1 M invocations | **$0** |
+| DynamoDB (on-demand) — < 25 GB | **$0** |
+| Each provisioned HTTP API — $1/million calls | **~$0** at low volume |
+| Each provisioned REST API — $3.50/million calls | **~$0** at low volume |
+| **Total GUI portal** | **~$0/month** |
 
 ---
 
@@ -172,204 +163,22 @@ graph LR
 
 ```
 .
-├── .github/
-│   └── workflows/
-│       ├── deploy_terraform.yml    # plan on branches, apply on main, manual deploy
-│       └── destroy_terraform.yml   # manual destroy with safety confirmation
 ├── environments/
-│   ├── dev/                        # WAF off, burst=50, rate=25, logs=14d
-│   ├── sit/                        # WAF on, burst=100, rate=50, logs=30d
-│   ├── stage/                      # WAF on, burst=500, rate=200, logs=90d
-│   └── prod/                       # WAF on, burst=500, rate=200, logs=90d
-│       └── (each has: backend.tf, main.tf, outputs.tf, providers.tf, variables.tf, terraform.tfvars.example)
+│   ├── dev/          # WAF off, low throttle
+│   ├── sit/          # WAF on, moderate limits
+│   ├── stage/        # Production-identical settings
+│   └── prod/         # Full WAF + throttle
 ├── modules/
-│   ├── stack/                      # Composite module — wires all 4 modules
-│   ├── api-gateway/                # HTTP API, JWT + Lambda authorizers, WAF, logging
-│   ├── cognito/                    # User pool + app client
-│   ├── lambda/                     # Main handler + authorizer fn, IAM, X-Ray, live alias
-│   └── monitoring/                 # SNS, 5 alarms, 6-widget dashboard
-├── lambda/
-│   └── src/
-│       ├── index.js                # Main handler — detects JWT / custom / none auth
-│       └── authorizer.js           # Custom Lambda authorizer — X-Api-Key validation
-├── scripts/
-│   └── bootstrap-state.sh          # One-time: S3, DynamoDB, OIDC, IAM role
-├── .gitignore
-├── README.md
-└── docs/
-    ├── index.md                    # Docs landing page + quick links
-    ├── setup.md                    # Full setup guide from zero
-    └── testing.md                  # Complete test guide with curl + Postman
+│   ├── stack/        # Composite — wires cognito + lambda + api-gateway + monitoring
+│   ├── api-gateway/  # HTTP API, JWT + Lambda authorizers, WAF, access logs
+│   ├── cognito/      # User pool + app client
+│   ├── lambda/       # Main handler + authorizer fn, blue/green alias, X-Ray
+│   └── monitoring/   # SNS, 5 alarms, CloudWatch dashboard
+├── lambda/src/
+│   ├── index.js      # Main handler — routes by auth context
+│   └── authorizer.js # Custom Lambda authorizer — X-Api-Key validation
+└── web-gui/
+    ├── frontend/     # React + Tailwind SPA
+    ├── backend/      # GUI Lambda — handler.js + provisioners/
+    └── infrastructure/ # Terraform for GUI stack (S3, API GW, Lambda, DynamoDB)
 ```
-
----
-
-## Quick Start
-
-> 📖 **Starting from scratch?** Follow **[docs/setup.md](./docs/setup.md)**
-> 🧪 **Testing the API?** See **[docs/testing.md](./docs/testing.md)**
-
-```bash
-# 1. Bootstrap (one-time)
-export AWS_REGION=eu-north-1
-export GITHUB_ORG=your-github-username
-export GITHUB_REPO=api-gateway-terraform
-export BUCKET_NAME=tf-state-$(aws sts get-caller-identity --query Account --output text)
-AWS_PAGER="" bash scripts/bootstrap-state.sh
-
-# 2. Add secrets to each GitHub Environment (dev, sit, stage, prod):
-#    AWS_ROLE_ARN = arn from bootstrap output
-#    ALARM_EMAIL  = your-email@example.com
-
-# 3. Push to feature branch → plan only
-git push origin feature/my-branch
-
-# 4. Merge to main → plan + apply
-git push origin main
-```
-
----
-
-## Routes & Auth Types
-
-| Route | Auth Type | Client sends | Validated by |
-|---|---|---|---|
-| `GET /secure` | **JWT** (Cognito) | `Authorization: Bearer <IdToken>` | API Gateway (signature + issuer + expiry) |
-| `GET /admin` | **Custom Lambda** | `X-Api-Key: my-secret-key-123` | `authorizer.js` Lambda function |
-| `GET /health` | **None** (public) | Nothing | — |
-
----
-
-## CI/CD Workflows
-
-### deploy_terraform.yml
-
-| Trigger | Job | What runs |
-|---------|-----|-----------|
-| Push to any branch | `plan-dev` | fmt + init + validate + plan (dev only) |
-| PR to main | `plan-dev` | same + posts plan as PR comment |
-| Push to main | `deploy` | plan + **apply** (dev only — expand matrix when ready) |
-| Manual (`workflow_dispatch`) | `confirm-input` → `deploy-manual` | safety check → plan + **apply** (only if main) |
-
-### destroy_terraform.yml
-
-Manual only. Select environment + type name to confirm → `terraform destroy`.
-
-### Expanding to all environments
-
-```yaml
-# In deploy_terraform.yml, change:
-environment: [dev]
-# to:
-environment: [dev, sit, stage, prod]
-```
-
----
-
-## Lambda Response Format
-
-All 3 routes use the same main Lambda. It detects which auth was used from the event:
-
-```json
-// GET /secure with valid JWT
-{
-  "message": "Access granted",
-  "authMethod": "jwt",
-  "user": { "sub": "805c995c-...", "email": "user@example.com" },
-  "environment": "dev",
-  "requestId": "...",
-  "timestamp": "2026-06-01T14:11:41.106Z"
-}
-
-// GET /admin with correct X-Api-Key
-{
-  "message": "Access granted",
-  "authMethod": "custom",
-  "user": { "authMethod": "api-key", "keyId": "my-secre..." },
-  "environment": "dev"
-}
-
-// GET /health (no auth)
-{
-  "message": "Access granted",
-  "authMethod": "none",
-  "user": {},
-  "environment": "dev"
-}
-```
-
----
-
-## Terraform Outputs
-
-Get current values after deploy:
-```bash
-terraform -chdir=environments/dev output
-```
-
-| Output | Description |
-|--------|-------------|
-| `api_endpoint` | Base URL of the HTTP API |
-| `secure_endpoint` | Full URL for `GET /secure` |
-| `cognito_user_pool_id` | Cognito pool ID |
-| `cognito_client_id` | App client ID for token requests |
-| `lambda_function_name` | Main Lambda function name |
-| `lambda_version` | Currently deployed version |
-| `dashboard_url` | CloudWatch dashboard URL |
-| `sns_topic_arn` | SNS topic for alarm emails |
-| `waf_arn` | WAF WebACL ARN (empty in dev) |
-
----
-
-## Environment Differences
-
-| Setting | dev | sit | stage | prod |
-|---------|-----|-----|-------|------|
-| WAF | Off | On | On | On |
-| Throttle burst | 50 | 100 | 500 | 500 |
-| Throttle rate | 25/s | 50/s | 200/s | 200/s |
-| WAF rate limit | 500/5min | 1000/5min | 2000/5min | 2000/5min |
-| Log retention | 14 days | 30 days | 90 days | 90 days |
-
----
-
-## Production Features
-
-| Feature | Implementation |
-|---------|----------------|
-| **JWT Auth** | API Gateway native JWT authorizer — validates Cognito `IdToken` (signature, issuer, audience, expiry) |
-| **Custom Lambda Auth** | Lambda authorizer with `enable_simple_responses = true` — validates `X-Api-Key` header |
-| **Multi-auth routes** | JWT, CUSTOM, AWS_IAM, NONE — configured per route via Terraform variable |
-| **WAF** | Rate limiting + AWS managed rules (sit/stage/prod) |
-| **API Throttling** | Burst + rate limits per environment |
-| **X-Ray** | Active tracing on main Lambda |
-| **Blue/Green** | `publish = true` + `live` alias — instant rollback |
-| **CloudWatch** | 5 alarms, 6-widget dashboard, JSON access logs |
-| **SNS Alerts** | Email on alarm state change |
-| **Remote State** | S3 + DynamoDB lock |
-| **OIDC** | No static AWS credentials — short-lived token exchange |
-| **Auto-zip** | `archive_file` zips `lambda/src/` automatically |
-
----
-
-## Blue/Green Rollback
-
-```bash
-aws lambda update-alias --function-name api-demo-dev-lambda --name live --function-version <previous-version> --region eu-north-1
-```
-
----
-
-## Cost Estimate (dev environment)
-
-| Service | Free tier |
-|---------|-----------|
-| Lambda (2 functions) | 1M req/month free |
-| API Gateway | 1M HTTP calls/month free |
-| Cognito | 50K MAU free |
-| CloudWatch | 5 GB logs free |
-| DynamoDB | 25 GB free |
-| S3 | 5 GB free |
-| WAF | **$5/month** — disabled in dev |
-
-**Estimated dev cost: ~$0/month** within free tier.
