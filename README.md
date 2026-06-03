@@ -25,21 +25,22 @@ sequenceDiagram
     actor C as Client
     participant WAF as WAF v2
     participant GW as API Gateway HTTP API
-    participant Auth as JWT / Lambda / IAM Authorizer
+    participant Cognito as Cognito User Pool (JWKS)
+    participant Auth as Lambda Authorizer
     participant L as Lambda (live alias)
 
     Note over C,L: JWT path — GET /secure
     C->>WAF: GET /secure  Authorization: Bearer <IdToken>
     WAF->>GW: forward (rate check passed)
-    GW->>Auth: validate JWT (signature + issuer + audience + expiry)
-    Auth-->>GW: claims {sub, email}
+    GW->>Cognito: fetch JWKS (/.well-known/jwks.json) & validate signature + issuer + audience + expiry
+    Cognito-->>GW: token valid — return claims {sub, email}
     GW->>L: invoke with claims in event.requestContext.authorizer.jwt
     L-->>C: 200 {authMethod: jwt-cognito}
 
     Note over C,L: Custom Key path — GET /admin
     C->>GW: GET /admin  X-Api-Key: my-secret-key-123
-    GW->>Auth: invoke authorizer Lambda
-    Auth-->>GW: {isAuthorized: true}
+    GW->>Auth: invoke Lambda authorizer (X-Api-Key header)
+    Auth-->>GW: {isAuthorized: true} (cached 5 min)
     GW->>L: invoke main Lambda
     L-->>C: 200 {authMethod: custom-lambda-apikey}
 
