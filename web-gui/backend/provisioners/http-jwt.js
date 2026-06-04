@@ -6,10 +6,52 @@
  * Reuses the EXISTING Cognito User Pool — no new pool created.
  */
 
+const https = require('https');
 const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand, CreateAuthorizerCommand } = require('./base');
 
 // AWS_ACCOUNT_REGION is the custom env var; AWS_REGION is set automatically by Lambda runtime
 const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
+
+// ── Validate the Cognito pool is reachable BEFORE calling CreateAuthorizerCommand ──
+// API GW v2 validates the OIDC discovery URL when creating a JWT authorizer.
+// If the pool doesn't exist it returns HTTP 400 with no __type → "Unknown: UnknownError".
+// This check gives a clear, actionable error instead.
+function validateCognitoIssuer(issuer, logTag) {
+  const discoveryUrl = `${issuer}/.well-known/openid-configuration`;
+  console.log(`${logTag} validating Cognito issuer → ${discoveryUrl}`);
+
+  return new Promise((resolve, reject) => {
+    const req = https.get(discoveryUrl, { timeout: 6000 }, (res) => {
+      res.resume(); // discard body — we only care about the status code
+      if (res.statusCode === 200) {
+        console.log(`${logTag} Cognito issuer valid (HTTP 200)`);
+        resolve();
+      } else {
+        reject(new Error(
+          `Cognito pool not found or not accessible — OIDC discovery returned HTTP ${res.statusCode}. ` +
+          `Pool ID '${process.env.EXISTING_COGNITO_POOL_ID}' in region '${REGION}' does not exist or is wrong. ` +
+          `Check EXISTING_COGNITO_POOL_ID env var in the Lambda function configuration. ` +
+          `Discovery URL: ${discoveryUrl}`
+        ));
+      }
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(
+        `Cognito issuer validation timed out — OIDC endpoint did not respond within 6s. ` +
+        `URL: ${discoveryUrl}`
+      ));
+    });
+
+    req.on('error', (e) => {
+      reject(new Error(
+        `Cognito issuer validation failed — could not reach OIDC endpoint: ${e.message}. ` +
+        `URL: ${discoveryUrl}`
+      ));
+    });
+  });
+}
 
 async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
   // tag() is a function so apiId updates once base returns
@@ -29,6 +71,12 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
 
   const issuer   = `https://cognito-idp.${REGION}.amazonaws.com/${process.env.EXISTING_COGNITO_POOL_ID}`;
   const audience = [process.env.EXISTING_COGNITO_CLIENT_ID];
+
+  // ── Pre-flight: verify the Cognito pool exists before calling API GW ─────────
+  // API GW validates the OIDC discovery URL at authorizer-create time.
+  // A deleted / wrong pool gives "Unknown 400" with no useful message.
+  await validateCognitoIssuer(issuer, tag());
+
   console.log(`${tag()} step 6 — CreateAuthorizer | issuer=${issuer} audience=${JSON.stringify(audience)}`);
 
   // Create JWT authorizer — reuses existing Cognito pool
