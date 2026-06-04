@@ -39,6 +39,17 @@ function buildIntegrationUri(lambdaArn) {
   return `arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations`;
 }
 
+// ── Extract qualifier/alias from a Lambda ARN (if present) ───────────────────
+// Standard ARN (7 parts): arn:aws:lambda:{region}:{account}:function:{name}
+// With qualifier (8 parts): arn:aws:lambda:{region}:{account}:function:{name}:{alias|version}
+// Returns the qualifier string, or undefined if the ARN is unqualified.
+function extractLambdaQualifier(lambdaArn) {
+  if (!lambdaArn) return undefined;
+  const parts = lambdaArn.split(':');
+  // parts: ['arn','aws','lambda',region,account,'function',name,?qualifier]
+  return parts.length === 8 ? parts[7] : undefined;
+}
+
 const apigw  = new ApiGatewayV2Client({ region: REGION });
 const lambda = new LambdaClient({ region: REGION });
 const logs   = new CloudWatchLogsClient({ region: REGION });
@@ -60,60 +71,70 @@ async function getAccountId() {
  * Returns: { apiId, integrationId, apiEndpoint }
  */
 async function createHttpApiBase(apiName, environment, description, { onApiCreated } = {}) {
-  console.log(`[base] createHttpApiBase — ${apiName}-${environment} | region=${REGION} | lambdaArn=${process.env.EXISTING_LAMBDA_ARN} | lambdaFn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME}`);
+  // Consistent log prefix — apiId is filled in after step 1
+  const tag = () => `[base|${apiName}-${environment}|apiId=${_apiId ?? 'pending'}]`;
+
+  let _apiId = null;
+  console.log(`${tag()} createHttpApiBase start | region=${REGION} | lambdaArn=${process.env.EXISTING_LAMBDA_ARN} | lambdaFn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME}`);
 
   // 1. Create the HTTP API
-  console.log(`[base] step 1 — CreateApi`);
+  console.log(`${tag()} step 1 — CreateApi`);
   const api = await apigw.send(new CreateApiCommand({
     Name:         `${apiName}-${environment}-api`,
     ProtocolType: 'HTTP',
     Description:  description,
   }));
-  console.log(`[base] step 1 done — apiId=${api.ApiId} endpoint=${api.ApiEndpoint}`);
+  _apiId = api.ApiId;
+  console.log(`${tag()} step 1 done — endpoint=${api.ApiEndpoint}`);
 
   // ✅ Save api_id to DynamoDB immediately — so delete works even if later steps fail
   if (onApiCreated) await onApiCreated(api.ApiId);
 
   // 2. Create Lambda integration — points to EXISTING backend Lambda
   const integrationUri = buildIntegrationUri(process.env.EXISTING_LAMBDA_ARN);
-  console.log(`[base] step 2 — CreateIntegration | integrationUri=${integrationUri}`);
+  console.log(`${tag()} step 2 — CreateIntegration | integrationUri=${integrationUri}`);
   const integration = await apigw.send(new CreateIntegrationCommand({
     ApiId:                api.ApiId,
     IntegrationType:      'AWS_PROXY',
     IntegrationUri:       integrationUri,
     PayloadFormatVersion: '2.0',
   }));
-  console.log(`[base] step 2 done — integrationId=${integration.IntegrationId}`);
+  console.log(`${tag()} step 2 done — integrationId=${integration.IntegrationId}`);
 
   // 3. Create $default stage with auto-deploy
-  console.log(`[base] step 3 — CreateStage`);
+  console.log(`${tag()} step 3 — CreateStage`);
   await apigw.send(new CreateStageCommand({
     ApiId:      api.ApiId,
     StageName:  '$default',
     AutoDeploy: true,
   }));
-  console.log(`[base] step 3 done`);
+  console.log(`${tag()} step 3 done`);
 
   // 4. Create CloudWatch log group
   const logGroupName = `/aws/apigateway/${apiName}-${environment}-api`;
-  console.log(`[base] step 4 — CreateLogGroup ${logGroupName}`);
+  console.log(`${tag()} step 4 — CreateLogGroup ${logGroupName}`);
   try {
     await logs.send(new CreateLogGroupCommand({ logGroupName }));
   } catch (e) {
     if (e.name !== 'ResourceAlreadyExistsException') throw e;
+    console.log(`${tag()} step 4 — log group already exists, skipping`);
   }
   // PutRetentionPolicy is cosmetic — warn but never fail provisioning
   try {
     await logs.send(new PutRetentionPolicyCommand({ logGroupName, retentionInDays: 14 }));
   } catch (e) {
-    console.warn(`[base] Could not set log retention (non-fatal): ${e.name} — ${e.message}`);
+    console.warn(`${tag()} step 4 — could not set log retention (non-fatal): ${e.name} — ${e.message}`);
   }
-  console.log(`[base] step 4 done`);
+  console.log(`${tag()} step 4 done`);
 
   // 5. Allow API Gateway to invoke the existing Lambda
+  //    Qualifier is derived from EXISTING_LAMBDA_ARN (e.g. the ':live' alias suffix).
+  //    If the ARN is unqualified (plain function ARN), Qualifier is omitted so the
+  //    permission applies to all versions/aliases — never hardcode 'live' here.
   const accountId = await getAccountId();
   const sourceArn = `arn:aws:execute-api:${REGION}:${accountId}:${api.ApiId}/*/*`;
-  console.log(`[base] step 5 — AddPermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} sourceArn=${sourceArn}`);
+  const lambdaQualifier = extractLambdaQualifier(process.env.EXISTING_LAMBDA_ARN);
+  console.log(`${tag()} step 5 — AddPermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} qualifier=${lambdaQualifier ?? 'none'} sourceArn=${sourceArn}`);
   try {
     await lambda.send(new AddPermissionCommand({
       FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
@@ -121,16 +142,16 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
       Action:       'lambda:InvokeFunction',
       Principal:    'apigateway.amazonaws.com',
       SourceArn:    sourceArn,
-      Qualifier:    'live',
+      ...(lambdaQualifier && { Qualifier: lambdaQualifier }),
     }));
   } catch (e) {
     if (e.name === 'ResourceConflictException') {
-      console.log(`[base] Lambda permission already exists for ${apiName}-${environment} — skipping`);
+      console.log(`${tag()} step 5 — Lambda permission already exists, skipping`);
     } else {
       throw e;
     }
   }
-  console.log(`[base] step 5 done — createHttpApiBase complete`);
+  console.log(`${tag()} step 5 done — createHttpApiBase complete`);
 
   return {
     apiId:           api.ApiId,
@@ -144,36 +165,46 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
  * Deletes an HTTP API and cleans up Lambda permission + log group.
  */
 async function deleteHttpApiBase(apiId, apiName, environment) {
-  // Remove Lambda permission
+  const tag = `[base|${apiName}-${environment}|apiId=${apiId ?? 'unknown'}]`;
+
+  // Remove Lambda permission — derive qualifier from ARN, same logic as create
+  const lambdaQualifier = extractLambdaQualifier(process.env.EXISTING_LAMBDA_ARN);
+  console.log(`${tag} step 1 — RemovePermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} qualifier=${lambdaQualifier ?? 'none'}`);
   try {
     await lambda.send(new RemovePermissionCommand({
       FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
       StatementId:  `AllowAPIGW-${apiName}-${environment}`,
-      Qualifier:    'live',
+      ...(lambdaQualifier && { Qualifier: lambdaQualifier }),
     }));
+    console.log(`${tag} step 1 done`);
   } catch (e) {
-    console.warn(`[base] Could not remove Lambda permission: ${e.message}`);
+    console.warn(`${tag} step 1 — could not remove Lambda permission (non-fatal): ${e.name} — ${e.message}`);
   }
 
   // Delete the API (cascades — deletes routes, integrations, authorizers)
+  console.log(`${tag} step 2 — DeleteApi`);
   try {
     await apigw.send(new DeleteApiCommand({ ApiId: apiId }));
+    console.log(`${tag} step 2 done`);
   } catch (e) {
     // NotFoundException means already deleted — safe to continue
     if (e.name !== 'NotFoundException') {
       throw e;
     }
-    console.warn(`[base] API ${apiId} not found — already deleted`);
+    console.warn(`${tag} step 2 — API not found, already deleted`);
   }
 
   // Delete log group
+  const logGroupName = `/aws/apigateway/${apiName}-${environment}-api`;
+  console.log(`${tag} step 3 — DeleteLogGroup ${logGroupName}`);
   try {
-    await logs.send(new DeleteLogGroupCommand({
-      logGroupName: `/aws/apigateway/${apiName}-${environment}-api`,
-    }));
+    await logs.send(new DeleteLogGroupCommand({ logGroupName }));
+    console.log(`${tag} step 3 done`);
   } catch (e) {
-    console.warn(`[base] Could not delete log group: ${e.message}`);
+    console.warn(`${tag} step 3 — could not delete log group (non-fatal): ${e.name} — ${e.message}`);
   }
+
+  console.log(`${tag} deleteHttpApiBase complete`);
 }
 
 module.exports = {

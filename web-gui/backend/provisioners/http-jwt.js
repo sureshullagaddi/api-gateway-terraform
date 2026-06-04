@@ -12,19 +12,24 @@ const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand, CreateA
 const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
 
 async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
-  console.log(`[http-jwt] create start — apiName=${apiName} env=${environment} region=${REGION}`);
-  console.log(`[http-jwt] env vars — COGNITO_POOL_ID=${process.env.EXISTING_COGNITO_POOL_ID} CLIENT_ID=${process.env.EXISTING_COGNITO_CLIENT_ID}`);
+  // tag() is a function so apiId updates once base returns
+  let _apiId = null;
+  const tag = () => `[http-jwt|${apiName}-${environment}|apiId=${_apiId ?? 'pending'}]`;
+
+  console.log(`${tag()} create start | region=${REGION}`);
+  console.log(`${tag()} env vars | COGNITO_POOL_ID=${process.env.EXISTING_COGNITO_POOL_ID} CLIENT_ID=${process.env.EXISTING_COGNITO_CLIENT_ID}`);
 
   const base = await createHttpApiBase(
     apiName, environment,
     `JWT-protected HTTP API — Cognito auth, ${httpMethod} ${routePath}`,
     { onApiCreated }
   );
-  console.log(`[http-jwt] base created — apiId=${base.apiId}`);
+  _apiId = base.apiId;
+  console.log(`${tag()} base created | endpoint=${base.apiEndpoint}`);
 
   const issuer   = `https://cognito-idp.${REGION}.amazonaws.com/${process.env.EXISTING_COGNITO_POOL_ID}`;
   const audience = [process.env.EXISTING_COGNITO_CLIENT_ID];
-  console.log(`[http-jwt] creating JWT authorizer — issuer=${issuer} audience=${JSON.stringify(audience)}`);
+  console.log(`${tag()} step 6 — CreateAuthorizer | issuer=${issuer} audience=${JSON.stringify(audience)}`);
 
   // Create JWT authorizer — reuses existing Cognito pool
   const authorizer = await apigw.send(new CreateAuthorizerCommand({
@@ -34,9 +39,10 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     IdentitySource:   '$request.header.Authorization',
     JwtConfiguration: { Issuer: issuer, Audience: audience },
   }));
-  console.log(`[http-jwt] authorizer created — authorizerId=${authorizer.AuthorizerId}`);
+  console.log(`${tag()} step 6 done | authorizerId=${authorizer.AuthorizerId}`);
 
   // Create route with JWT auth
+  console.log(`${tag()} step 7 — CreateRoute | ${httpMethod} ${routePath}`);
   await apigw.send(new CreateRouteCommand({
     ApiId:             base.apiId,
     RouteKey:          `${httpMethod} ${routePath}`,
@@ -44,27 +50,30 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     AuthorizerId:      authorizer.AuthorizerId,
     Target:            `integrations/${base.integrationId}`,
   }));
-  console.log(`[http-jwt] route created — ${httpMethod} ${routePath}`);
+  console.log(`${tag()} step 7 done — create complete`);
 
   return {
     api_id:        base.apiId,
     api_endpoint:  base.apiEndpoint,
     route_url:     `${base.apiEndpoint}${routePath}`,
     authorizer_id: authorizer.AuthorizerId,
+    // cognito details stored inside resources so handler persists them to DynamoDB
     resources: {
-      api_id:        base.apiId,
-      authorizer_id: authorizer.AuthorizerId,
-      log_group:     base.logGroupName,
+      api_id:            base.apiId,
+      authorizer_id:     authorizer.AuthorizerId,
+      log_group:         base.logGroupName,
+      cognito_pool_id:   process.env.EXISTING_COGNITO_POOL_ID,
+      cognito_client_id: process.env.EXISTING_COGNITO_CLIENT_ID,
     },
-    cognito_pool_id:   process.env.EXISTING_COGNITO_POOL_ID,
-    cognito_client_id: process.env.EXISTING_COGNITO_CLIENT_ID,
     test_hint: `Get an IdToken from Cognito and send as: Authorization: Bearer <IdToken>`,
   };
 }
 
 async function destroy({ api_id, api_name, environment }) {
+  console.log(`[http-jwt|${api_name}-${environment}|apiId=${api_id}] destroy start`);
   await deleteHttpApiBase(api_id, api_name, environment);
   // Cognito pool is shared — do NOT delete it
+  console.log(`[http-jwt|${api_name}-${environment}|apiId=${api_id}] destroy complete`);
 }
 
 module.exports = { create, destroy };

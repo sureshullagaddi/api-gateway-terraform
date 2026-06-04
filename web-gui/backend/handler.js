@@ -79,17 +79,41 @@ function serializeAwsError(e) {
   // name / code — prefer the specific exception type over generic "Unknown"
   const code = (e.name && e.name !== 'Unknown' && e.name !== 'Error')
     ? e.name
-    : (e.Code || e.code || e.name || 'UnknownError');
+    : (e.Code || e.code || e.__type || e.name || 'UnknownError');
 
-  // message — skip generic sentinels and fall back through every known field
+  // message — skip generic sentinels and fall back through every known field.
+  // Also try parsing the raw HTTP response body which SDK v3 sometimes leaves
+  // unparsed when it returns name="Unknown" message="Unknown".
   const GENERIC = new Set(['Unknown', 'UnknownError', 'undefined', '']);
+
+  let bodyMessage = null;
+  try {
+    // $response.body can be a string, Buffer, or Uint8Array depending on SDK version
+    const rawBody = e.$response?.body;
+    if (rawBody) {
+      const bodyStr =
+        typeof rawBody === 'string'     ? rawBody :
+        Buffer.isBuffer(rawBody)        ? rawBody.toString('utf8') :
+        ArrayBuffer.isView(rawBody)     ? Buffer.from(rawBody).toString('utf8') :
+        typeof rawBody.transformToString === 'function' ? null // streaming — skip
+        : null;
+      if (bodyStr) {
+        const parsed = JSON.parse(bodyStr);
+        bodyMessage = parsed.message || parsed.Message || parsed.errorMessage || parsed.__type || null;
+      }
+    }
+  } catch {
+    // Response body unreadable — ignore, fall through to other fields
+  }
+
   const message =
     (!GENERIC.has(e.message) ? e.message : null) ||
+    bodyMessage ||
     e.Error?.Message ||
     e.Message ||
     e.errorMessage ||
     e.detail ||
-    code;
+    (!GENERIC.has(code) ? `AWS error: ${code}` : 'Provisioning failed — check CloudWatch logs for details');
 
   // Log the full raw error to CloudWatch so developers can always find the cause
   console.error('[serializeAwsError] raw error:', JSON.stringify(e, Object.getOwnPropertyNames(e)));
@@ -120,6 +144,8 @@ exports.handler = async (event) => {
       const errors = validate(body);
       if (errors.length) return err('Validation failed', 400, errors);
 
+      console.log(`[handler|${body.api_name}|${body.api_type}] POST /apis — validate OK`);
+
       // Check for duplicate api_name
       const existing = await db.getApi(body.api_name);
       if (existing) return err(`API '${body.api_name}' already exists. Use DELETE to remove it first.`, 409);
@@ -143,6 +169,7 @@ exports.handler = async (event) => {
         partner_name: body.partner_name ?? null,
         status:      'CREATING',
       });
+      console.log(`[handler|${body.api_name}|${body.api_type}] DB record saved — status=CREATING`);
 
       // Call the provisioner for this api_type
       const provisioner = provisioners[body.api_type];
@@ -159,30 +186,45 @@ exports.handler = async (event) => {
           // Saves api_id to DynamoDB as soon as API GW is created
           // so delete can clean up even if later steps fail
           onApiCreated: async (apiId) => {
+            console.log(`[handler|${body.api_name}|${body.api_type}|apiId=${apiId}] onApiCreated — updating DB`);
             await db.updateStatus(body.api_name, 'CREATING', { api_id: apiId });
           },
         });
       } catch (provisionError) {
         // Serialise the full AWS SDK error — .message alone is often "UnknownError"
         const errDetail = serializeAwsError(provisionError);
-        await db.updateStatus(body.api_name, 'FAILED', { error_message: errDetail.message });
+        console.error(`[handler|${body.api_name}|${body.api_type}] provisioning FAILED — code=${errDetail.code} status=${errDetail.httpStatus}`);
+        await db.updateStatus(body.api_name, 'FAILED', {
+          error_message: errDetail.message,
+          error_code:    errDetail.code    ?? null,
+          error_status:  errDetail.httpStatus ? String(errDetail.httpStatus) : null,
+          error_req_id:  errDetail.requestId  ?? null,
+        });
         console.error('[handler] Provisioning failed:', provisionError);
         return err('Provisioning failed', 500, errDetail);
       }
 
       // Update DynamoDB with created resource IDs
+      // cognito_pool_id / cognito_client_id are nested inside result.resources for http-jwt;
+      // we also surface them as top-level fields for easy querying / display.
+      const resources = result.resources ?? {};
+      console.log(`[handler|${body.api_name}|${body.api_type}|apiId=${result.api_id}] provisioning succeeded — updating DB status=ACTIVE`);
       await db.updateStatus(body.api_name, 'ACTIVE', {
-        api_id:        result.api_id,
-        api_endpoint:  result.api_endpoint,
-        route_url:     result.route_url,
-        resources:     JSON.stringify(result.resources ?? {}),
-        test_hint:     result.test_hint     ?? null,
-        api_key_id:    result.api_key_id    ?? null,
-        usage_plan_id: result.usage_plan_id ?? null,
+        api_id:            result.api_id,
+        api_endpoint:      result.api_endpoint,
+        route_url:         result.route_url,
+        resources:         JSON.stringify(resources),
+        test_hint:         result.test_hint         ?? null,
+        api_key_id:        result.api_key_id         ?? null,
+        usage_plan_id:     result.usage_plan_id      ?? null,
         // partner_name from provisioner result (REST usage plan sets this)
-        partner_name:  result.partner_name  ?? body.partner_name ?? null,
+        partner_name:      result.partner_name       ?? body.partner_name ?? null,
+        // Cognito fields — set for http-jwt, null for all others
+        cognito_pool_id:   resources.cognito_pool_id   ?? null,
+        cognito_client_id: resources.cognito_client_id ?? null,
       });
 
+      console.log(`[handler|${body.api_name}|${body.api_type}|apiId=${result.api_id}] done — route_url=${result.route_url}`);
       return ok({
         message:      `API '${body.api_name}' created successfully`,
         api_name:     body.api_name,
@@ -196,6 +238,7 @@ exports.handler = async (event) => {
     // ── GET /apis — list all APIs ─────────────────────────────────────────────
     if (method === 'GET' && path === '/apis') {
       const items = await db.listApis();
+      console.log(`[handler] GET /apis — returning ${items.length} items`);
       return ok({ count: items.length, apis: items });
     }
 
@@ -203,6 +246,7 @@ exports.handler = async (event) => {
     if (method === 'GET' && apiName) {
       const item = await db.getApi(apiName);
       if (!item) return err(`API '${apiName}' not found`, 404);
+      console.log(`[handler|${apiName}|apiId=${item.api_id ?? 'none'}] GET — status=${item.status}`);
       return ok(item);
     }
 
@@ -213,6 +257,7 @@ exports.handler = async (event) => {
       if (item.status !== 'DELETE_FAILED' && item.status !== 'FAILED') {
         return err(`Force clear only allowed for DELETE_FAILED or FAILED status (current: ${item.status})`, 400);
       }
+      console.log(`[handler|${apiName}|apiId=${item.api_id ?? 'none'}] force-clear — status=${item.status}`);
       await db.deleteApi(apiName);
       return ok({ message: `API '${apiName}' force-cleared from registry. Note: some AWS resources may still exist — check AWS Console.` });
     }
@@ -229,6 +274,7 @@ exports.handler = async (event) => {
         return err(`Cannot delete API with status '${item.status}'`, 400);
       }
 
+      console.log(`[handler|${apiName}|${item.api_type}|apiId=${item.api_id ?? 'none'}] DELETE — status=${item.status}`);
       await db.updateStatus(apiName, 'DELETING');
 
       const provisioner = provisioners[item.api_type];
@@ -241,11 +287,18 @@ exports.handler = async (event) => {
         });
       } catch (destroyError) {
         const errDetail = serializeAwsError(destroyError);
-        await db.updateStatus(apiName, 'DELETE_FAILED', { error_message: errDetail.message });
+        console.error(`[handler|${apiName}|${item.api_type}|apiId=${item.api_id ?? 'none'}] destroy FAILED — code=${errDetail.code} status=${errDetail.httpStatus}`);
+        await db.updateStatus(apiName, 'DELETE_FAILED', {
+          error_message: errDetail.message,
+          error_code:    errDetail.code    ?? null,
+          error_status:  errDetail.httpStatus ? String(errDetail.httpStatus) : null,
+          error_req_id:  errDetail.requestId  ?? null,
+        });
         console.error('[handler] Destroy failed:', destroyError);
         return err('Destroy failed', 500, errDetail);
       }
 
+      console.log(`[handler|${apiName}|${item.api_type}|apiId=${item.api_id ?? 'none'}] destroy complete — removing DB record`);
       await db.deleteApi(apiName);
       return ok({ message: `API '${apiName}' and all its AWS resources have been deleted` });
     }

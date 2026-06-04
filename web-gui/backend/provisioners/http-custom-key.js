@@ -24,33 +24,44 @@ function buildAuthorizerUri(lambdaArn) {
 }
 
 async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
-  console.log(`[http-custom-key] create start — apiName=${apiName} env=${environment} region=${REGION}`);
-  console.log(`[http-custom-key] env vars — AUTHORIZER_ARN=${process.env.EXISTING_AUTHORIZER_LAMBDA_ARN} AUTHORIZER_FN=${process.env.EXISTING_AUTHORIZER_FUNCTION_NAME}`);
+  let _apiId = null;
+  const tag = () => `[http-custom-key|${apiName}-${environment}|apiId=${_apiId ?? 'pending'}]`;
+
+  console.log(`${tag()} create start | region=${REGION}`);
+  console.log(`${tag()} env vars | AUTHORIZER_ARN=${process.env.EXISTING_AUTHORIZER_LAMBDA_ARN} AUTHORIZER_FN=${process.env.EXISTING_AUTHORIZER_FUNCTION_NAME}`);
 
   const base = await createHttpApiBase(
     apiName, environment,
     `Custom Lambda authorizer HTTP API — X-Api-Key, ${httpMethod} ${routePath}`,
     { onApiCreated }
   );
-  console.log(`[http-custom-key] base created — apiId=${base.apiId}`);
+  _apiId = base.apiId;
+  console.log(`${tag()} base created | endpoint=${base.apiEndpoint}`);
 
   // Allow API Gateway to invoke the EXISTING authorizer Lambda
   const accountId = await getAccountId();
   const authSourceArn = `arn:aws:execute-api:${REGION}:${accountId}:${base.apiId}/authorizers/*`;
-  console.log(`[http-custom-key] adding Lambda permission — FunctionName=${process.env.EXISTING_AUTHORIZER_FUNCTION_NAME} SourceArn=${authSourceArn}`);
-
-  await lambda.send(new AddPermissionCommand({
-    FunctionName: process.env.EXISTING_AUTHORIZER_FUNCTION_NAME,
-    StatementId:  `AllowAuthorizerAPIGW-${apiName}-${environment}`,
-    Action:       'lambda:InvokeFunction',
-    Principal:    'apigateway.amazonaws.com',
-    SourceArn:    authSourceArn,
-  }));
-  console.log(`[http-custom-key] Lambda permission added`);
+  console.log(`${tag()} step 6 — AddPermission (authorizer Lambda) | fn=${process.env.EXISTING_AUTHORIZER_FUNCTION_NAME} sourceArn=${authSourceArn}`);
+  try {
+    await lambda.send(new AddPermissionCommand({
+      FunctionName: process.env.EXISTING_AUTHORIZER_FUNCTION_NAME,
+      StatementId:  `AllowAuthorizerAPIGW-${apiName}-${environment}`,
+      Action:       'lambda:InvokeFunction',
+      Principal:    'apigateway.amazonaws.com',
+      SourceArn:    authSourceArn,
+    }));
+    console.log(`${tag()} step 6 done`);
+  } catch (e) {
+    if (e.name === 'ResourceConflictException') {
+      console.log(`${tag()} step 6 — authorizer permission already exists, skipping`);
+    } else {
+      throw e;
+    }
+  }
 
   // Create Lambda REQUEST authorizer — simple response format
   const authorizerUri = buildAuthorizerUri(process.env.EXISTING_AUTHORIZER_LAMBDA_ARN);
-  console.log(`[http-custom-key] creating REQUEST authorizer — uri=${authorizerUri}`);
+  console.log(`${tag()} step 7 — CreateAuthorizer | uri=${authorizerUri}`);
   const authorizer = await apigw.send(new CreateAuthorizerCommand({
     ApiId:                           base.apiId,
     Name:                            `${apiName}-${environment}-lambda-authorizer`,
@@ -61,9 +72,10 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     AuthorizerResultTtlInSeconds:    300,   // cache 5 min
     IdentitySource:                  '$request.header.X-Api-Key',
   }));
-  console.log(`[http-custom-key] authorizer created — authorizerId=${authorizer.AuthorizerId}`);
+  console.log(`${tag()} step 7 done | authorizerId=${authorizer.AuthorizerId}`);
 
   // Create route with CUSTOM auth
+  console.log(`${tag()} step 8 — CreateRoute | ${httpMethod} ${routePath}`);
   await apigw.send(new CreateRouteCommand({
     ApiId:             base.apiId,
     RouteKey:          `${httpMethod} ${routePath}`,
@@ -71,7 +83,7 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     AuthorizerId:      authorizer.AuthorizerId,
     Target:            `integrations/${base.integrationId}`,
   }));
-  console.log(`[http-custom-key] route created — ${httpMethod} ${routePath}`);
+  console.log(`${tag()} step 8 done — create complete`);
 
   return {
     api_id:        base.apiId,
@@ -89,19 +101,24 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
 }
 
 async function destroy({ api_id, api_name, environment, resources }) {
+  const tag = `[http-custom-key|${api_name}-${environment}|apiId=${api_id ?? 'unknown'}]`;
   const res = typeof resources === 'string' ? JSON.parse(resources) : (resources ?? {});
 
   // Remove authorizer Lambda permission
+  console.log(`${tag} step 1 — RemovePermission (authorizer Lambda) | fn=${process.env.EXISTING_AUTHORIZER_FUNCTION_NAME}`);
   try {
     await lambda.send(new RemovePermissionCommand({
       FunctionName: process.env.EXISTING_AUTHORIZER_FUNCTION_NAME,
       StatementId:  res.authorizer_permission_id ?? `AllowAuthorizerAPIGW-${api_name}-${environment}`,
     }));
+    console.log(`${tag} step 1 done`);
   } catch (e) {
-    console.warn(`[http-custom-key] Could not remove authorizer permission: ${e.message}`);
+    console.warn(`${tag} step 1 — could not remove authorizer permission (non-fatal): ${e.name} — ${e.message}`);
   }
 
+  console.log(`${tag} step 2 — deleteHttpApiBase`);
   await deleteHttpApiBase(res.api_id ?? api_id, api_name, environment);
+  console.log(`${tag} destroy complete`);
 }
 
 module.exports = { create, destroy };
