@@ -20,6 +20,7 @@ export default function CreateApiForm({ onSubmit, onError }) {
   const [loading, setLoading]       = useState(false);
   const [errorMsg, setErrorMsg]     = useState('');
   const [errorDetails, setErrorDetails] = useState(null);
+  const [stackOpen, setStackOpen]   = useState(false);
 
   const isRestApi = form.api_type === 'rest-usage-plan';
   const apiDesc   = API_TYPES.find(t => t.value === form.api_type)?.desc ?? '';
@@ -27,6 +28,7 @@ export default function CreateApiForm({ onSubmit, onError }) {
   const set = (field) => (e) => {
     setErrorMsg('');
     setErrorDetails(null);
+    setStackOpen(false);
     setForm(f => ({ ...f, [field]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }));
   };
 
@@ -49,6 +51,7 @@ export default function CreateApiForm({ onSubmit, onError }) {
       setForm(INITIAL_FORM);
       setErrorMsg('');
       setErrorDetails(null);
+      setStackOpen(false);
     } catch (err) {
       const msg = err.message || 'Unknown error — check browser console for details';
       setErrorMsg(msg);
@@ -141,26 +144,75 @@ export default function CreateApiForm({ onSubmit, onError }) {
 
         {/* Inline error banner — persists until user edits form or retries */}
         {errorMsg && (
-          <div className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
             {/* Error icon */}
             <svg className="w-5 h-5 mt-0.5 shrink-0 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
             </svg>
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 space-y-1.5">
               <p className="font-semibold">API creation failed</p>
-              <p className="mt-0.5 text-red-600 break-words whitespace-pre-wrap">{errorMsg}</p>
-              {/* Show AWS request ID for CloudWatch cross-reference */}
-              {errorDetails?.requestId && (
-                <p className="mt-1 text-xs text-red-400 font-mono break-all">
-                  AWS RequestId: {errorDetails.requestId}
-                </p>
+
+              {/* Full error message */}
+              <p className="text-red-600 break-words whitespace-pre-wrap">{errorMsg}</p>
+
+              {/* Structured AWS error details */}
+              {errorDetails && (
+                <div className="mt-2 pt-2 border-t border-red-200 space-y-1 text-xs font-mono text-red-500">
+                  {errorDetails.code && errorDetails.code !== 'UnknownError' && (
+                    <p><span className="font-semibold">Code:</span> {errorDetails.code}</p>
+                  )}
+                  {errorDetails.httpStatus && (
+                    <p><span className="font-semibold">HTTP Status:</span> {errorDetails.httpStatus}</p>
+                  )}
+                  {errorDetails.fault && (
+                    <p><span className="font-semibold">Fault:</span> {errorDetails.fault}</p>
+                  )}
+                  {errorDetails.requestId && (
+                    <p className="break-all"><span className="font-semibold">AWS RequestId:</span> {errorDetails.requestId}</p>
+                  )}
+                  {errorDetails.detail && (
+                    <p className="break-words whitespace-pre-wrap"><span className="font-semibold">Detail:</span> {errorDetails.detail}</p>
+                  )}
+                  {errorDetails.reason && (
+                    <p className="break-words whitespace-pre-wrap"><span className="font-semibold">Reason:</span> {errorDetails.reason}</p>
+                  )}
+                  {errorDetails.OAuthError && (
+                    <p className="break-words whitespace-pre-wrap"><span className="font-semibold">OAuth Error:</span> {errorDetails.OAuthError}</p>
+                  )}
+                </div>
               )}
+
+              {/* Full stack trace — collapsible */}
+              {errorDetails?.stack && (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setStackOpen(o => !o)}
+                    className="flex items-center gap-1 text-xs text-red-400 hover:text-red-600 font-mono underline underline-offset-2"
+                  >
+                    <svg className={`w-3 h-3 transition-transform ${stackOpen ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                    {stackOpen ? 'Hide' : 'Show'} stack trace
+                  </button>
+                  {stackOpen && (
+                    <pre className="mt-2 p-3 bg-red-900 text-red-100 text-xs rounded-lg overflow-x-auto overflow-y-auto max-h-64 whitespace-pre font-mono leading-relaxed">
+                      {errorDetails.stack}
+                    </pre>
+                  )}
+                </div>
+              )}
+
+              {/* Hint to check CloudWatch */}
+              <p className="text-xs text-red-400 mt-1">
+                Check CloudWatch Logs for the full stack trace.
+              </p>
             </div>
             {/* Dismiss button */}
             <button
               type="button"
-              onClick={() => { setErrorMsg(''); setErrorDetails(null); }}
+              onClick={() => { setErrorMsg(''); setErrorDetails(null); setStackOpen(false); }}
               className="shrink-0 text-red-400 hover:text-red-600 transition-colors"
               aria-label="Dismiss error"
             >

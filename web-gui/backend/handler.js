@@ -164,6 +164,7 @@ async function serializeAwsError(e) {
     httpStatus: e.$metadata?.httpStatusCode ?? null,
     requestId:  e.$metadata?.requestId      ?? null,
     fault:      e.$fault                    ?? null,
+    stack:      e.stack                     ?? null,
     ...(bodyJson?.code      && { awsCode:    bodyJson.code }),
     ...(e.detail            && { detail:     e.detail }),
     ...(e.reason            && { reason:     e.reason }),

@@ -76,8 +76,30 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
   const audience = [clientId];
 
   console.log(`${tag()} env vars | COGNITO_POOL_ID=${poolId} CLIENT_ID=${clientId}`);
+  console.log(`${tag()} jwt config | issuer=${issuer} audience=${JSON.stringify(audience)}`);
 
-  // ── STEP 0: Validate Cognito pool BEFORE creating any AWS resources ───────────
+  // ── STEP 0a: Validate required env vars ──────────────────────────────────────
+  if (!poolId || poolId === 'undefined') {
+    throw Object.assign(
+      new Error(
+        `EXISTING_COGNITO_POOL_ID is not set or invalid (got: '${poolId}'). ` +
+        `Re-deploy the web-gui infrastructure so the variable is populated.`
+      ),
+      { name: 'MissingCognitoPoolId' }
+    );
+  }
+  if (!clientId || clientId === 'undefined') {
+    throw Object.assign(
+      new Error(
+        `EXISTING_COGNITO_CLIENT_ID is not set or invalid (got: '${clientId}'). ` +
+        `API Gateway JWT authorizer requires a valid audience (client ID). ` +
+        `Re-deploy the web-gui infrastructure so the variable is populated.`
+      ),
+      { name: 'MissingCognitoClientId' }
+    );
+  }
+
+  // ── STEP 0b: Validate Cognito pool BEFORE creating any AWS resources ──────────
   // Fail fast here — avoids orphaned API Gateways on every retry.
   await validateCognitoIssuer(issuer, poolId, tag());
 
@@ -91,13 +113,24 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
   console.log(`${tag()} base created | endpoint=${base.apiEndpoint}`);
 
   // ── STEP 6: Create JWT authorizer ────────────────────────────────────────────
-  console.log(`${tag()} step 6 — CreateAuthorizer | issuer=${issuer} audience=${JSON.stringify(audience)}`);
+  const safeAudience = audience.filter(Boolean);
+  console.log(`${tag()} step 6 — CreateAuthorizer | issuer=${issuer} audience=${JSON.stringify(safeAudience)}`);
+  if (safeAudience.length === 0) {
+    throw Object.assign(
+      new Error(
+        `JWT authorizer audience is empty after filtering. ` +
+        `EXISTING_COGNITO_CLIENT_ID resolved to: '${clientId}'. ` +
+        `API Gateway requires at least one valid audience value.`
+      ),
+      { name: 'EmptyJwtAudience' }
+    );
+  }
   const authorizer = await apigw.send(new CreateAuthorizerCommand({
     ApiId:            base.apiId,
     Name:             `${apiName}-${environment}-jwt-authorizer`,
     AuthorizerType:   'JWT',
     IdentitySource:   '$request.header.Authorization',
-    JwtConfiguration: { Issuer: issuer, Audience: audience },
+    JwtConfiguration: { Issuer: issuer, Audience: safeAudience },
   }));
   console.log(`${tag()} step 6 done | authorizerId=${authorizer.AuthorizerId}`);
 
