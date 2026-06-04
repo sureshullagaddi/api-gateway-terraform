@@ -75,36 +75,59 @@ function err(message, status = 400, details = null) {
 // ── AWS error serialiser ──────────────────────────────────────────────────────
 // AWS SDK v3 sets e.name="Unknown" e.message="Unknown" when it can't parse the
 // service error body. The real cause lives in other fields — we try them all.
-function serializeAwsError(e) {
+//
+// IMPORTANT: async — must be awaited. The $response.body in AWS Lambda Node 18
+// is a SdkStream that requires transformToString() to decode (not synchronous).
+async function serializeAwsError(e) {
   // name / code — prefer the specific exception type over generic "Unknown"
   const code = (e.name && e.name !== 'Unknown' && e.name !== 'Error')
     ? e.name
     : (e.Code || e.code || e.__type || e.name || 'UnknownError');
 
-  // message — skip generic sentinels and fall back through every known field.
-  // Also try parsing the raw HTTP response body which SDK v3 sometimes leaves
-  // unparsed when it returns name="Unknown" message="Unknown".
   const GENERIC = new Set(['Unknown', 'UnknownError', 'undefined', '']);
 
-  let bodyMessage = null;
+  // ── Decode response body — try every encoding the SDK might use ──────────────
+  let bodyRaw = null;   // raw text from body
+  let bodyJson = null;  // parsed JSON (if body is JSON)
   try {
-    // $response.body can be a string, Buffer, or Uint8Array depending on SDK version
     const rawBody = e.$response?.body;
     if (rawBody) {
-      const bodyStr =
-        typeof rawBody === 'string'     ? rawBody :
-        Buffer.isBuffer(rawBody)        ? rawBody.toString('utf8') :
-        ArrayBuffer.isView(rawBody)     ? Buffer.from(rawBody).toString('utf8') :
-        typeof rawBody.transformToString === 'function' ? null // streaming — skip
-        : null;
-      if (bodyStr) {
-        const parsed = JSON.parse(bodyStr);
-        bodyMessage = parsed.message || parsed.Message || parsed.errorMessage || parsed.__type || null;
+      if (typeof rawBody === 'string') {
+        bodyRaw = rawBody;
+      } else if (Buffer.isBuffer(rawBody)) {
+        bodyRaw = rawBody.toString('utf8');
+      } else if (ArrayBuffer.isView(rawBody)) {
+        bodyRaw = Buffer.from(rawBody).toString('utf8');
+      } else if (typeof rawBody.transformToString === 'function') {
+        // SdkStream — used in AWS Lambda Node 18 runtime with SDK v3
+        bodyRaw = await rawBody.transformToString('utf8');
+      } else if (typeof rawBody.text === 'function') {
+        // Web ReadableStream / Fetch Response body
+        bodyRaw = await rawBody.text();
+      }
+
+      if (bodyRaw) {
+        try {
+          bodyJson = JSON.parse(bodyRaw);
+        } catch {
+          // body is not JSON (e.g. XML or plain text) — keep bodyRaw as-is
+        }
       }
     }
-  } catch {
-    // Response body unreadable — ignore, fall through to other fields
+  } catch (bodyErr) {
+    console.warn('[serializeAwsError] could not read response body:', bodyErr?.message);
   }
+
+  const bodyMessage = bodyJson
+    ? (bodyJson.message || bodyJson.Message || bodyJson.errorMessage || bodyJson.__type || null)
+    : (bodyRaw ? bodyRaw.substring(0, 500) : null);   // plain text / XML fallback
+
+  const bodyCode = bodyJson
+    ? (bodyJson.code || bodyJson.Code || bodyJson.__type || null)
+    : null;
+
+  // Final code — prefer body-parsed code over "Unknown"
+  const finalCode = (code !== 'Unknown' && code !== 'UnknownError') ? code : (bodyCode || code);
 
   const message =
     (!GENERIC.has(e.message) ? e.message : null) ||
@@ -113,19 +136,36 @@ function serializeAwsError(e) {
     e.Message ||
     e.errorMessage ||
     e.detail ||
-    (!GENERIC.has(code) ? `AWS error: ${code}` : 'Provisioning failed — check CloudWatch logs for details');
+    (!GENERIC.has(finalCode) ? `AWS error: ${finalCode}` : 'Provisioning failed — check CloudWatch logs for details');
 
-  // Log the full raw error to CloudWatch so developers can always find the cause
-  console.error('[serializeAwsError] raw error:', JSON.stringify(e, Object.getOwnPropertyNames(e)));
+  // ── Structured diagnostic dump so CloudWatch always has the full picture ─────
+  const diag = {
+    name:       e.name,
+    message:    e.message,
+    code:       finalCode,
+    httpStatus: e.$metadata?.httpStatusCode,
+    requestId:  e.$metadata?.requestId,
+    fault:      e.$fault,
+    bodyRaw:    bodyRaw ? bodyRaw.substring(0, 1000) : null,
+    bodyJson,
+  };
+  console.error('[serializeAwsError] diagnostic:', JSON.stringify(diag));
+  // Full error object (own properties only — avoids circular refs in body streams)
+  try {
+    const safeProps = Object.getOwnPropertyNames(e).filter(k => k !== '$response');
+    console.error('[serializeAwsError] full error props:', JSON.stringify(Object.fromEntries(safeProps.map(k => [k, e[k]]))));
+  } catch { /* non-serializable fields — ignore */ }
 
   return {
-    code,
+    code:       finalCode,
     message,
     httpStatus: e.$metadata?.httpStatusCode ?? null,
     requestId:  e.$metadata?.requestId      ?? null,
-    ...(e.detail     && { detail:     e.detail }),
-    ...(e.reason     && { reason:     e.reason }),
-    ...(e.OAuthError && { OAuthError: e.OAuthError }),
+    fault:      e.$fault                    ?? null,
+    ...(bodyJson?.code      && { awsCode:    bodyJson.code }),
+    ...(e.detail            && { detail:     e.detail }),
+    ...(e.reason            && { reason:     e.reason }),
+    ...(e.OAuthError        && { OAuthError: e.OAuthError }),
   };
 }
 
@@ -191,8 +231,8 @@ exports.handler = async (event) => {
           },
         });
       } catch (provisionError) {
-        // Serialise the full AWS SDK error — .message alone is often "UnknownError"
-        const errDetail = serializeAwsError(provisionError);
+        // Serialise the full AWS SDK error — await required (reads streaming body)
+        const errDetail = await serializeAwsError(provisionError);
         console.error(`[handler|${body.api_name}|${body.api_type}] provisioning FAILED — code=${errDetail.code} status=${errDetail.httpStatus}`);
         await db.updateStatus(body.api_name, 'FAILED', {
           error_message: errDetail.message,
@@ -286,7 +326,7 @@ exports.handler = async (event) => {
           resources:   item.resources ? JSON.parse(item.resources) : {},
         });
       } catch (destroyError) {
-        const errDetail = serializeAwsError(destroyError);
+        const errDetail = await serializeAwsError(destroyError);
         console.error(`[handler|${apiName}|${item.api_type}|apiId=${item.api_id ?? 'none'}] destroy FAILED — code=${errDetail.code} status=${errDetail.httpStatus}`);
         await db.updateStatus(apiName, 'DELETE_FAILED', {
           error_message: errDetail.message,
@@ -307,6 +347,6 @@ exports.handler = async (event) => {
 
   } catch (e) {
     console.error('[handler] Unhandled error:', e);
-    return err('Internal server error', 500, serializeAwsError(e));
+    return err('Internal server error', 500, await serializeAwsError(e));
   }
 };

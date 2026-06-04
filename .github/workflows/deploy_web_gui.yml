@@ -155,7 +155,7 @@ jobs:
           terraform apply -auto-approve -input=false \
             -var="environment=${{ github.event.inputs.environment }}" \
             -var="existing_aws_region=${REGION}" \
-            -var="existing_lambda_arn=arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${LAMBDA_NAME}:live" \
+            -var="existing_lambda_arn=arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${LAMBDA_NAME}" \
             -var="existing_lambda_function_name=${LAMBDA_NAME}" \
             -var="existing_cognito_pool_id=${{ steps.stack.outputs.cognito_user_pool_id }}" \
             -var="existing_cognito_client_id=${{ steps.stack.outputs.cognito_client_id }}" \

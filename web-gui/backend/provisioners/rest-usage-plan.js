@@ -25,11 +25,13 @@ const {
 
 const { LambdaClient, AddPermissionCommand, RemovePermissionCommand } = require('@aws-sdk/client-lambda');
 const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts');
+// Reuse the same ARN normalisation logic as HTTP API provisioners
+const { buildIntegrationUri } = require('./base');
 
-const REGION    = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
-const apigwV1   = new APIGatewayClient({ region: REGION });
+const REGION       = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
+const apigwV1      = new APIGatewayClient({ region: REGION });
 const lambdaClient = new LambdaClient({ region: REGION });
-const stsClient = new STSClient({ region: REGION });
+const stsClient    = new STSClient({ region: REGION });
 
 let _accountId = null;
 async function getAccountId() {
@@ -40,12 +42,6 @@ async function getAccountId() {
   return _accountId;
 }
 
-// Extract qualifier/alias from a Lambda ARN (e.g. ':live' suffix) — same logic as base.js
-function extractLambdaQualifier(lambdaArn) {
-  if (!lambdaArn) return undefined;
-  const parts = lambdaArn.split(':');
-  return parts.length === 8 ? parts[7] : undefined;
-}
 
 async function create({ apiName, environment, routePath, httpMethod, partnerName, quotaPerDay, rateLimitPerSecond, onApiCreated }) {
   let _apiId = null;
@@ -100,9 +96,9 @@ async function create({ apiName, environment, routePath, httpMethod, partnerName
   console.log(`${tag()} step 4 done`);
 
   // 5. Lambda proxy integration — reuses EXISTING Lambda
-  //    Qualifier is derived from EXISTING_LAMBDA_ARN if the ARN includes an alias/version suffix.
-  const lambdaQualifier = extractLambdaQualifier(process.env.EXISTING_LAMBDA_ARN);
-  const integrationUri = `arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${process.env.EXISTING_LAMBDA_ARN}/invocations`;
+  //    buildIntegrationUri normalises all ARN formats (plain, qualified, API GW invoke)
+  //    and always produces a clean unqualified invoke ARN — same logic as HTTP API provisioners.
+  const integrationUri = buildIntegrationUri(process.env.EXISTING_LAMBDA_ARN);
   console.log(`${tag()} step 5 — PutIntegration | uri=${integrationUri}`);
   await apigwV1.send(new PutIntegrationCommand({
     restApiId:             api.id,
@@ -153,10 +149,10 @@ async function create({ apiName, environment, routePath, httpMethod, partnerName
   console.log(`${tag()} step 9 done`);
 
   // 10. Allow REST API to invoke the existing Lambda
-  //     Qualifier is derived from EXISTING_LAMBDA_ARN — never hardcode 'live'.
+  //     No qualifier — integration URI is now unqualified (buildIntegrationUri strips it).
   const accountId = await getAccountId();
   const sourceArn = `arn:aws:execute-api:${REGION}:${accountId}:${api.id}/*/*`;
-  console.log(`${tag()} step 10 — AddPermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} qualifier=${lambdaQualifier ?? 'none'} sourceArn=${sourceArn}`);
+  console.log(`${tag()} step 10 — AddPermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} qualifier=none sourceArn=${sourceArn}`);
   try {
     await lambdaClient.send(new AddPermissionCommand({
       FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
@@ -164,7 +160,7 @@ async function create({ apiName, environment, routePath, httpMethod, partnerName
       Action:       'lambda:InvokeFunction',
       Principal:    'apigateway.amazonaws.com',
       SourceArn:    sourceArn,
-      ...(lambdaQualifier && { Qualifier: lambdaQualifier }),
+      // No Qualifier — integration URI uses unqualified ARN (buildIntegrationUri strips qualifier)
     }));
     console.log(`${tag()} step 10 done`);
   } catch (e) {

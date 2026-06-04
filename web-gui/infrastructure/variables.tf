@@ -22,9 +22,9 @@ variable "environment" {
 
 variable "existing_lambda_arn" {
   description = <<-EOT
-    API Gateway INVOKE ARN of the existing Lambda live alias.
-    Must be in API GW format (NOT plain Lambda ARN):
-      arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/{lambda-arn}:live/invocations
+    Plain Lambda ARN of the existing backend Lambda function (no alias, no API GW wrapper).
+    The provisioner converts this to the correct API GW invoke ARN format at runtime.
+    Example: arn:aws:lambda:eu-north-1:123456789012:function:api-demo-dev-lambda
     Run generate-tfvars.sh to get the correct value automatically.
   EOT
   type        = string
@@ -47,9 +47,9 @@ variable "existing_cognito_client_id" {
 
 variable "existing_authorizer_lambda_arn" {
   description = <<-EOT
-    API Gateway INVOKE ARN of the existing custom authorizer Lambda.
-    Must be in API GW format (NOT plain Lambda ARN):
-      arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/{lambda-arn}/invocations
+    Plain Lambda ARN of the existing custom authorizer Lambda (no alias, no API GW wrapper).
+    The provisioner converts this to the correct API GW invoke ARN format at runtime.
+    Example: arn:aws:lambda:eu-north-1:123456789012:function:api-demo-dev-lambda-authorizer
     Run generate-tfvars.sh to get the correct value automatically.
   EOT
   type        = string

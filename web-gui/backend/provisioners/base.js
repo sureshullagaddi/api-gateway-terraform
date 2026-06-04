@@ -30,13 +30,59 @@ const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
 // ── Build the correct Lambda integration URI for HTTP API v2 ─────────────────
 // API GW v2 CreateIntegration requires the API GW invoke ARN format:
 //   arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/{lambda-arn}/invocations
-// Accepts either format in the env var and normalises automatically.
+//
+// EXISTING_LAMBDA_ARN can arrive in three formats — all normalised here:
+//
+//  A) Plain Lambda ARN, unqualified:
+//       arn:aws:lambda:eu-north-1:ACCT:function:my-fn
+//     → wrap into invoke ARN as-is
+//
+//  B) Plain Lambda ARN WITH qualifier (e.g. :live, :1):
+//       arn:aws:lambda:eu-north-1:ACCT:function:my-fn:live
+//     → strip qualifier, wrap into invoke ARN
+//
+//  C) Already in API GW invoke ARN format (from generate-tfvars.sh):
+//       arn:aws:apigateway:eu-north-1:lambda:path/.../functions/arn:aws:lambda:...:live/invocations
+//     → extract the embedded Lambda ARN, strip its qualifier, rebuild invoke ARN
+//
+// Result is always the clean unqualified invoke ARN used by CreateIntegrationCommand.
 function buildIntegrationUri(lambdaArn) {
   if (!lambdaArn) return lambdaArn;
-  // Already in invoke ARN format — pass through
-  if (lambdaArn.startsWith('arn:aws:apigateway:')) return lambdaArn;
-  // Plain Lambda ARN — convert to invoke ARN format
-  return `arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations`;
+
+  let baseLambdaArn = lambdaArn;
+
+  if (lambdaArn.startsWith('arn:aws:apigateway:')) {
+    // Case C — extract the embedded Lambda ARN from the invoke-ARN wrapper
+    const m = lambdaArn.match(
+      /^arn:aws:apigateway:[^:]+:lambda:path\/2015-03-31\/functions\/(.+)\/invocations$/
+    );
+    if (m) {
+      baseLambdaArn = m[1]; // e.g. arn:aws:lambda:eu-north-1:ACCT:function:NAME[:qualifier]
+    } else {
+      // Unknown API GW format — return as-is and let AWS give a clear error
+      console.warn('[base] buildIntegrationUri: unrecognised invoke-ARN format, passing through');
+      return lambdaArn;
+    }
+  }
+
+  // Cases A, B, and extracted Case C — strip qualifier if present
+  const parts = baseLambdaArn.split(':');
+  // Standard Lambda ARN: arn:aws:lambda:region:account:function:name         (7 parts)
+  // Qualified Lambda ARN: arn:aws:lambda:region:account:function:name:alias  (8 parts)
+  const cleanArn = parts.length === 8 ? parts.slice(0, 7).join(':') : baseLambdaArn;
+
+  // Warn on region mismatch — cross-region Lambda integration returns 400
+  const arnRegion = parts[3];
+  if (arnRegion && arnRegion !== REGION) {
+    console.warn(
+      `[base] buildIntegrationUri: Lambda ARN region '${arnRegion}' ` +
+      `differs from configured REGION '${REGION}' — cross-region integrations return 400`
+    );
+  }
+
+  const uri = `arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${cleanArn}/invocations`;
+  console.log(`[base] buildIntegrationUri: ${lambdaArn.substring(0, 60)}... → ${uri}`);
+  return uri;
 }
 
 // ── Extract qualifier/alias from a Lambda ARN (if present) ───────────────────
@@ -128,13 +174,13 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
   console.log(`${tag()} step 4 done`);
 
   // 5. Allow API Gateway to invoke the existing Lambda
-  //    Qualifier is derived from EXISTING_LAMBDA_ARN (e.g. the ':live' alias suffix).
-  //    If the ARN is unqualified (plain function ARN), Qualifier is omitted so the
-  //    permission applies to all versions/aliases — never hardcode 'live' here.
+  //    Integration URI now uses the UNQUALIFIED ARN (qualifier stripped in buildIntegrationUri).
+  //    Permission is added WITHOUT a qualifier so it covers all versions/aliases.
+  //    If you need to restrict to a specific alias (e.g. :live), set EXISTING_LAMBDA_ARN
+  //    to the unqualified ARN AND add a separate permission for that alias explicitly.
   const accountId = await getAccountId();
   const sourceArn = `arn:aws:execute-api:${REGION}:${accountId}:${api.ApiId}/*/*`;
-  const lambdaQualifier = extractLambdaQualifier(process.env.EXISTING_LAMBDA_ARN);
-  console.log(`${tag()} step 5 — AddPermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} qualifier=${lambdaQualifier ?? 'none'} sourceArn=${sourceArn}`);
+  console.log(`${tag()} step 5 — AddPermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} qualifier=none (unqualified) sourceArn=${sourceArn}`);
   try {
     await lambda.send(new AddPermissionCommand({
       FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
@@ -142,7 +188,9 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
       Action:       'lambda:InvokeFunction',
       Principal:    'apigateway.amazonaws.com',
       SourceArn:    sourceArn,
-      ...(lambdaQualifier && { Qualifier: lambdaQualifier }),
+      // No Qualifier — permission applies to all versions/aliases.
+      // Integration URI points to unqualified ARN, so API GW invokes $LATEST
+      // (or the alias configured on the function's auto-routing policy).
     }));
   } catch (e) {
     if (e.name === 'ResourceConflictException') {
@@ -167,14 +215,13 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
 async function deleteHttpApiBase(apiId, apiName, environment) {
   const tag = `[base|${apiName}-${environment}|apiId=${apiId ?? 'unknown'}]`;
 
-  // Remove Lambda permission — derive qualifier from ARN, same logic as create
-  const lambdaQualifier = extractLambdaQualifier(process.env.EXISTING_LAMBDA_ARN);
-  console.log(`${tag} step 1 — RemovePermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} qualifier=${lambdaQualifier ?? 'none'}`);
+  // Remove Lambda permission — no qualifier (matches how it was created: unqualified)
+  console.log(`${tag} step 1 — RemovePermission | fn=${process.env.EXISTING_LAMBDA_FUNCTION_NAME} qualifier=none`);
   try {
     await lambda.send(new RemovePermissionCommand({
       FunctionName: process.env.EXISTING_LAMBDA_FUNCTION_NAME,
       StatementId:  `AllowAPIGW-${apiName}-${environment}`,
-      ...(lambdaQualifier && { Qualifier: lambdaQualifier }),
+      // No Qualifier — must match the StatementId that was created without qualifier
     }));
     console.log(`${tag} step 1 done`);
   } catch (e) {
@@ -210,6 +257,7 @@ async function deleteHttpApiBase(apiId, apiName, environment) {
 module.exports = {
   apigw, lambda, logs,
   getAccountId,
+  buildIntegrationUri,      // exported so rest-usage-plan can reuse same normalisation logic
   createHttpApiBase,
   deleteHttpApiBase,
   CreateRouteCommand,
