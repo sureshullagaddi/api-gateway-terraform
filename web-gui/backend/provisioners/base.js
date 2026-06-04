@@ -6,7 +6,6 @@ const {
   CreateIntegrationCommand,
   CreateRouteCommand,
   CreateStageCommand,
-  CreateDeploymentCommand,
   CreateAuthorizerCommand,
   DeleteApiCommand,
 } = require('@aws-sdk/client-apigatewayv2');
@@ -102,51 +101,6 @@ const lambda = new LambdaClient({ region: REGION });
 const logs   = new CloudWatchLogsClient({ region: REGION });
 const sts    = new STSClient({ region: REGION });
 
-// ── Raw HTTP response interceptor — logs the actual body before SDK parses it ─
-// Catches the "Unknown: UnknownError bodyRaw=null" case where API GW returns
-// a 400 with a body the SDK can't deserialize (no __type field).
-apigw.middlewareStack.add(
-  (next, context) => async (args) => {
-    const result = await next(args);
-    return result;
-  },
-  { step: 'initialize', name: 'debugMiddleware', priority: 'low' }
-);
-
-// Use deserialize step to capture raw response before SDK consumes it
-apigw.middlewareStack.add(
-  (next, context) => async (args) => {
-    try {
-      return await next(args);
-    } catch (e) {
-      // Re-read the response body from the error's $response if available
-      if (e.$response) {
-        try {
-          const body = e.$response.body;
-          let rawText = null;
-          if (body && typeof body.transformToString === 'function') {
-            rawText = await body.transformToString('utf8');
-          } else if (body && typeof body.text === 'function') {
-            rawText = await body.text();
-          } else if (typeof body === 'string') {
-            rawText = body;
-          } else if (Buffer.isBuffer(body)) {
-            rawText = body.toString('utf8');
-          }
-          console.error(`[apigw-middleware] raw HTTP ${e.$metadata?.httpStatusCode} response body for ${context.commandName}:`, rawText ?? '(empty/null)');
-          console.error(`[apigw-middleware] request input for ${context.commandName}:`, JSON.stringify(args.input ?? {}, null, 2));
-          // Attach so serializeAwsError can use it
-          if (rawText && !e.bodyRaw) e.bodyRaw = rawText;
-        } catch (readErr) {
-          console.error('[apigw-middleware] could not read error body:', readErr?.message);
-        }
-      }
-      throw e;
-    }
-  },
-  { step: 'deserialize', name: 'rawErrorLogger', priority: 'low' }
-);
-
 // Cache account ID — fetched once per Lambda container lifetime
 let _accountId = null;
 async function getAccountId() {
@@ -194,15 +148,11 @@ async function createHttpApiBase(apiName, environment, description, { onApiCreat
   console.log(`${tag()} step 2 done — integrationId=${integration.IntegrationId}`);
 
   // 3. Create $default stage with auto-deploy
-  // NOTE: Stage is intentionally created BEFORE authorizer/route so the API endpoint
-  // is available, but AutoDeploy is set to FALSE here to avoid an internal AWS
-  // deployment lock that causes CreateAuthorizerCommand to return HTTP 400.
-  // Each provisioner must call createDefaultStage(apiId) AFTER adding its routes.
-  console.log(`${tag()} step 3 — CreateStage (AutoDeploy=false, deploy triggered after routes)`);
+  console.log(`${tag()} step 3 — CreateStage`);
   await apigw.send(new CreateStageCommand({
     ApiId:      api.ApiId,
     StageName:  '$default',
-    AutoDeploy: false,
+    AutoDeploy: true,
   }));
   console.log(`${tag()} step 3 done`);
 
@@ -308,36 +258,11 @@ async function deleteHttpApiBase(apiId, apiName, environment) {
   console.log(`${tag} deleteHttpApiBase complete`);
 }
 
-/**
- * Enables AutoDeploy on the $default stage and triggers an immediate deployment.
- * Call this AFTER all routes and authorizers have been created to avoid the
- * API Gateway internal deployment lock that causes CreateAuthorizerCommand to
- * return HTTP 400 with empty body.
- */
-async function enableAutoDeployAndDeploy(apiId, logTag) {
-  console.log(`${logTag} enableAutoDeployAndDeploy — updating stage AutoDeploy=true then deploying`);
-
-  // 1. Switch the stage to AutoDeploy=true now that routes/authorizers are set
-  await apigw.send(new CreateStageCommand({
-    ApiId:      apiId,
-    StageName:  '$default',
-    AutoDeploy: true,
-  }));
-
-  // 2. Trigger an explicit deployment so the routes/authorizers go live immediately
-  const deployment = await apigw.send(new CreateDeploymentCommand({
-    ApiId:     apiId,
-    StageName: '$default',
-  }));
-  console.log(`${logTag} enableAutoDeployAndDeploy done — deploymentId=${deployment.DeploymentId}`);
-}
-
 module.exports = {
   apigw, lambda, logs,
   getAccountId,
-  buildIntegrationUri,
+  buildIntegrationUri,      // exported so rest-usage-plan can reuse same normalisation logic
   createHttpApiBase,
-  enableAutoDeployAndDeploy,
   deleteHttpApiBase,
   CreateRouteCommand,
   CreateAuthorizerCommand,

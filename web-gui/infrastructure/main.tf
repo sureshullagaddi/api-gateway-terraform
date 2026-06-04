@@ -141,28 +141,11 @@ resource "aws_cloudwatch_log_group" "gui_lambda" {
   tags              = local.tags
 }
 
-# ── Install backend npm dependencies before packaging ─────────────────────────
-# Runs npm ci (or npm install) every time package.json changes.
-# This ensures the Lambda zip always contains the correct pinned node_modules.
-resource "null_resource" "npm_install" {
-  triggers = {
-    # Re-run whenever package.json changes (catches version pin updates)
-    package_json = filemd5("${path.root}/../backend/package.json")
-  }
-
-  provisioner "local-exec" {
-    command     = "npm install --prefer-offline --no-audit --no-fund"
-    working_dir = "${path.root}/../backend"
-  }
-}
-
 # ── Package the GUI Lambda ────────────────────────────────────────────────────
 data "archive_file" "gui_lambda" {
   type        = "zip"
   source_dir  = "${path.root}/../backend"
   output_path = "${path.root}/../backend.zip"
-
-  depends_on = [null_resource.npm_install]
 }
 
 # ── GUI Lambda function ───────────────────────────────────────────────────────

@@ -7,7 +7,7 @@
  */
 
 const https = require('https');
-const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand, CreateAuthorizerCommand, enableAutoDeployAndDeploy } = require('./base');
+const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand, CreateAuthorizerCommand } = require('./base');
 
 // AWS_ACCOUNT_REGION is the custom env var; AWS_REGION is set automatically by Lambda runtime
 const REGION = process.env.AWS_ACCOUNT_REGION || process.env.AWS_REGION;
@@ -144,9 +144,6 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     Target:            `integrations/${base.integrationId}`,
   }));
   console.log(`${tag()} step 7 done — create complete`);
-
-  // ── STEP 8: Enable AutoDeploy and trigger deployment now that routes exist ────
-  await enableAutoDeployAndDeploy(base.apiId, tag());
 
   return {
     api_id:        base.apiId,

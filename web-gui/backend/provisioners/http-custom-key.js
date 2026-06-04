@@ -10,7 +10,6 @@ const { createHttpApiBase, deleteHttpApiBase,
   apigw, lambda, getAccountId,
   CreateRouteCommand, CreateAuthorizerCommand,
   AddPermissionCommand, RemovePermissionCommand,
-  enableAutoDeployAndDeploy,
 } = require('./base');
 
 // AWS_ACCOUNT_REGION is the custom env var; AWS_REGION is set automatically by Lambda runtime
@@ -85,8 +84,6 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     Target:            `integrations/${base.integrationId}`,
   }));
   console.log(`${tag()} step 8 done — create complete`);
-
-  await enableAutoDeployAndDeploy(base.apiId, tag());
 
   return {
     api_id:        base.apiId,
