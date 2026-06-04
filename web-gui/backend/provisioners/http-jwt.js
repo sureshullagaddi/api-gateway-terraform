@@ -125,13 +125,16 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
       { name: 'EmptyJwtAudience' }
     );
   }
-  const authorizer = await apigw.send(new CreateAuthorizerCommand({
+  const authorizerInput = {
     ApiId:            base.apiId,
     Name:             `${apiName}-${environment}-jwt-authorizer`,
     AuthorizerType:   'JWT',
     IdentitySource:   '$request.header.Authorization',
     JwtConfiguration: { Issuer: issuer, Audience: safeAudience },
-  }));
+  };
+  console.log(`${tag()} step 6 — CreateAuthorizerCommand input:`, JSON.stringify(authorizerInput, null, 2));
+  console.log(`${tag()} step 6 — input field types | ApiId=${typeof authorizerInput.ApiId} Name=${typeof authorizerInput.Name} Issuer=${typeof authorizerInput.JwtConfiguration.Issuer} Audience=${typeof authorizerInput.JwtConfiguration.Audience} AudienceIsArray=${Array.isArray(authorizerInput.JwtConfiguration.Audience)} AudienceLength=${authorizerInput.JwtConfiguration.Audience.length}`);
+  const authorizer = await apigw.send(new CreateAuthorizerCommand(authorizerInput));
   console.log(`${tag()} step 6 done | authorizerId=${authorizer.AuthorizerId}`);
 
   // ── STEP 7: Create route with JWT auth ───────────────────────────────────────
