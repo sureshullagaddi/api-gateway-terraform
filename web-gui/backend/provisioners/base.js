@@ -229,16 +229,20 @@ async function deleteHttpApiBase(apiId, apiName, environment) {
   }
 
   // Delete the API (cascades — deletes routes, integrations, authorizers)
-  console.log(`${tag} step 2 — DeleteApi`);
-  try {
-    await apigw.send(new DeleteApiCommand({ ApiId: apiId }));
-    console.log(`${tag} step 2 done`);
-  } catch (e) {
-    // NotFoundException means already deleted — safe to continue
-    if (e.name !== 'NotFoundException') {
-      throw e;
+  console.log(`${tag} step 2 — DeleteApi | apiId=${apiId ?? 'none'}`);
+  if (!apiId) {
+    console.warn(`${tag} step 2 — no apiId (provisioning failed before API was created), skipping`);
+  } else {
+    try {
+      await apigw.send(new DeleteApiCommand({ ApiId: apiId }));
+      console.log(`${tag} step 2 done`);
+    } catch (e) {
+      // NotFoundException means already deleted — safe to continue
+      if (e.name !== 'NotFoundException') {
+        throw e;
+      }
+      console.warn(`${tag} step 2 — API not found, already deleted`);
     }
-    console.warn(`${tag} step 2 — API not found, already deleted`);
   }
 
   // Delete log group

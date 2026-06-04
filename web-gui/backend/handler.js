@@ -80,7 +80,9 @@ function err(message, status = 400, details = null) {
 // is a SdkStream that requires transformToString() to decode (not synchronous).
 async function serializeAwsError(e) {
   // name / code — prefer the specific exception type over generic "Unknown"
-  const code = (e.name && e.name !== 'Unknown' && e.name !== 'Error')
+  // Also handles plain JS errors thrown by pre-flight checks (e.g. CognitoPoolNotFound)
+  const SKIP_NAMES = new Set(['Unknown', 'Error', 'UnknownError']);
+  const code = (e.name && !SKIP_NAMES.has(e.name))
     ? e.name
     : (e.Code || e.code || e.__type || e.name || 'UnknownError');
 
