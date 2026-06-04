@@ -5,7 +5,7 @@
  * Creates an HTTP API v2 with NO auth — public endpoint.
  */
 
-const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand } = require('./base');
+const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand, enableAutoDeployAndDeploy } = require('./base');
 
 async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
   let _apiId = null;
@@ -30,6 +30,8 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     Target:            `integrations/${base.integrationId}`,
   }));
   console.log(`${tag()} step 6 done — create complete`);
+
+  await enableAutoDeployAndDeploy(base.apiId, tag());
 
   return {
     api_id:       base.apiId,

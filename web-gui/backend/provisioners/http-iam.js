@@ -6,7 +6,7 @@
  * Caller must sign requests with AWS SDK — no API key, no token.
  */
 
-const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand } = require('./base');
+const { createHttpApiBase, deleteHttpApiBase, apigw, CreateRouteCommand, enableAutoDeployAndDeploy } = require('./base');
 
 async function create({ apiName, environment, routePath, httpMethod, onApiCreated }) {
   let _apiId = null;
@@ -31,6 +31,8 @@ async function create({ apiName, environment, routePath, httpMethod, onApiCreate
     Target:            `integrations/${base.integrationId}`,
   }));
   console.log(`${tag()} step 6 done — create complete`);
+
+  await enableAutoDeployAndDeploy(base.apiId, tag());
 
   return {
     api_id:       base.apiId,
